@@ -1,0 +1,3 @@
+[submodule "Assets/SetProperty"]
+	path = Assets/SetProperty
+	url = https://github.com/LMNRY/SetProperty.git
