@@ -10,6 +10,7 @@
 // Mikkel custom
 //#include "CustomLitInput.hlsl"
 #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/UnityInstancing.hlsl"
 
 // GLES2 has limited amount of interpolators
 #if defined(_PARALLAXMAP) && !defined(SHADER_API_GLES)
@@ -98,11 +99,13 @@ void InitializeInputData(Varyings input, half3 normalTS, out InputData inputData
 }
 
 // Mikkel custom
-inline void InitializeStandardLitSurfaceDataWithInstanceID(float2 uv, uint instanceID, out SurfaceData outSurfaceData)
+inline void InitializeStandardLitSurfaceDataWithInstanceID(float2 uv, out SurfaceData outSurfaceData)
 {
 	// Mikkel custom
-	float4 _BaseColor = colorBuffer[instanceID];
-	//_BaseColor = float4(0.5, 0.5, 0.5, 1);
+	#if	UNITY_ANY_INSTANCING_ENABLED 
+		_BaseColor = colorBuffer[unity_InstanceID];
+	#endif
+	//_BaseColor = float4(1, 0, 0, 1);
 
     half4 albedoAlpha = SampleAlbedoAlpha(uv, TEXTURE2D_ARGS(_BaseMap, sampler_BaseMap));
     outSurfaceData.alpha = Alpha(albedoAlpha.a, _BaseColor, _Cutoff);
@@ -214,7 +217,7 @@ Varyings LitPassVertexInstanced(Attributes input, uint instanceID : SV_InstanceI
 }
 
 // Used in Standard (Physically Based) shader
-half4 LitPassFragmentInstanced(Varyings input, uint instanceID : SV_InstanceID) : SV_Target
+half4 LitPassFragmentInstanced(Varyings input/*, uint instanceID : SV_InstanceID*/) : SV_Target
 {
     UNITY_SETUP_INSTANCE_ID(input);
     UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
@@ -230,7 +233,7 @@ half4 LitPassFragmentInstanced(Varyings input, uint instanceID : SV_InstanceID) 
 #endif
 
     SurfaceData surfaceData;
-    InitializeStandardLitSurfaceDataWithInstanceID(input.uv, instanceID, surfaceData);
+    InitializeStandardLitSurfaceDataWithInstanceID(input.uv, surfaceData);
 
     InputData inputData;
     InitializeInputData(input, surfaceData.normalTS, inputData);
@@ -245,6 +248,9 @@ half4 LitPassFragmentInstanced(Varyings input, uint instanceID : SV_InstanceID) 
 
 #endif
 
+///////////////////////////////////////////////////////////////////////////////
+//                  Shadow functions							             //
+///////////////////////////////////////////////////////////////////////////////
 
 #ifndef UNIVERSAL_SHADOW_CASTER_PASS_INCLUDED
 #define UNIVERSAL_SHADOW_CASTER_PASS_INCLUDED
@@ -314,4 +320,60 @@ half4 ShadowPassFragment(ShadowVaryings input) : SV_TARGET
     return 0;
 }
 
+#endif
+
+///////////////////////////////////////////////////////////////////////////////
+//                  Depth Functions					                         //
+///////////////////////////////////////////////////////////////////////////////
+
+#ifndef UNIVERSAL_DEPTH_ONLY_PASS_INCLUDED
+#define UNIVERSAL_DEPTH_ONLY_PASS_INCLUDED
+
+#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+
+struct DepthAttributes
+{
+    float4 position     : POSITION;
+    float2 texcoord     : TEXCOORD0;
+    UNITY_VERTEX_INPUT_INSTANCE_ID
+};
+
+struct DepthVaryings
+{
+    float2 uv           : TEXCOORD0;
+    float4 positionCS   : SV_POSITION;
+    UNITY_VERTEX_INPUT_INSTANCE_ID
+    UNITY_VERTEX_OUTPUT_STEREO
+};
+
+DepthVaryings DepthOnlyVertexInstanced(DepthAttributes input, uint instanceID : SV_InstanceID)
+{
+    DepthVaryings output = (DepthVaryings)0;
+    UNITY_SETUP_INSTANCE_ID(input);
+    UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
+
+	// Mikkel custom
+	float3x4 mat = matrixBuffer[/*UNITY_GET_INSTANCE_ID(input)*/instanceID];
+	// Convert to float4x4 and add a scale of 1
+	float4x4 mat4 = 
+	{
+		mat[0],
+		mat[1],
+		mat[2],
+		float4(0,0,0,1)
+	};
+
+	input.position = mul(mat4, input.position);
+    output.uv = TRANSFORM_TEX(input.texcoord, _BaseMap);
+    output.positionCS = TransformObjectToHClip(input.position.xyz);
+    return output;
+}
+
+half4 DepthOnlyFragmentInstanced(DepthVaryings input) : SV_TARGET
+{
+    UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
+
+    Alpha(SampleAlbedoAlpha(input.uv, TEXTURE2D_ARGS(_BaseMap, sampler_BaseMap)).a, _BaseColor, _Cutoff);
+    return 0;
+}
 #endif

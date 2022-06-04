@@ -70,6 +70,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	}
 	private string matrixSubsetUpdateMarker = "Update Matrix Subset";
 
+	[SerializeField]
 	private Material mat;
 	private Bounds bounds = new Bounds(Vector3.zero, Vector3.one * 10000);
 	private uint[] args;
@@ -100,7 +101,12 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		serializedTotalCount = TotalCount;
 
 		appendCompute = Resources.Load<ComputeShader>("InstancingAppendCompute");
-		mat = new Material(InstancingShader);
+		if(mat == null)
+		{
+			mat = new Material(InstancingShader);
+			mat.enableInstancing = true;
+		}
+
 		appendComputeKernel = appendCompute.FindKernel("CSMain");
 		appendCompute.GetKernelThreadGroupSizes(appendComputeKernel, out uint x, out _, out _);
 		threadCount = (int)x;

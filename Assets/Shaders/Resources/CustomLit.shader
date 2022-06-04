@@ -136,6 +136,12 @@ Shader "Universal Render Pipeline/CustomLit"
             #pragma vertex LitPassVertexInstanced
             #pragma fragment LitPassFragmentInstanced
 
+			// This setup function is required to be able to use the instancing features unity has builtin.
+			// These instancing keywords aren't compiled unless this function is defined when using the material with Graphics.DrawInstancedIndirect
+			// According to a late post in this thread https://forum.unity.com/threads/using-instanced-or-indirect-properties-in-a-vertex-shader.536542/
+			#pragma instancing_options procedural:setup
+			void setup() {}
+
             #include "Packages/com.unity.render-pipelines.universal/Shaders/LitInput.hlsl"
             //#include "Packages/com.unity.render-pipelines.universal/Shaders/LitForwardPass.hlsl"
 			#include "CustomLit.hlsl"
@@ -168,6 +174,12 @@ Shader "Universal Render Pipeline/CustomLit"
 
             #pragma vertex ShadowPassVertexInstanced
             #pragma fragment ShadowPassFragment
+
+			// This setup function is required to be able to use the instancing features unity has builtin.
+			// These instancing keywords aren't compiled unless this function is defined when using the material with Graphics.DrawInstancedIndirect
+			// According to a late post in this thread https://forum.unity.com/threads/using-instanced-or-indirect-properties-in-a-vertex-shader.536542/
+			#pragma instancing_options procedural:setup
+			void setup() {}
 
             #include "Packages/com.unity.render-pipelines.universal/Shaders/LitInput.hlsl"
             //#include "Packages/com.unity.render-pipelines.universal/Shaders/ShadowCasterPass.hlsl"
@@ -250,8 +262,14 @@ Shader "Universal Render Pipeline/CustomLit"
             #pragma exclude_renderers gles gles3 glcore
             #pragma target 4.5
 
-            #pragma vertex DepthOnlyVertex
-            #pragma fragment DepthOnlyFragment
+            #pragma vertex DepthOnlyVertexInstanced
+            #pragma fragment DepthOnlyFragmentInstanced
+
+			// This setup function is required to be able to use the instancing features unity has builtin.
+			// These instancing keywords aren't compiled unless this function is defined when using the material with Graphics.DrawInstancedIndirect
+			// According to a late post in this thread https://forum.unity.com/threads/using-instanced-or-indirect-properties-in-a-vertex-shader.536542/
+			#pragma instancing_options procedural:setup
+			void setup() {}
 
             // -------------------------------------
             // Material Keywords
@@ -264,7 +282,9 @@ Shader "Universal Render Pipeline/CustomLit"
             #pragma multi_compile _ DOTS_INSTANCING_ON
 
             #include "Packages/com.unity.render-pipelines.universal/Shaders/LitInput.hlsl"
-            #include "Packages/com.unity.render-pipelines.universal/Shaders/DepthOnlyPass.hlsl"
+            //#include "Packages/com.unity.render-pipelines.universal/Shaders/DepthOnlyPass.hlsl"
+			#include "CustomLit.hlsl"
+
             ENDHLSL
         }
 
