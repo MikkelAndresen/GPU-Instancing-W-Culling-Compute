@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using Unity.Collections;
+using Unity.Profiling;
 using UnityEngine;
+using UnityEngine.Profiling;
 
 public class DataSubset
 {
@@ -17,11 +20,14 @@ public class DataSubset
 
 public abstract class AbstractComputeBuffer : IDisposable
 {
+	public delegate void BufferWriteDelegate<T>(ref NativeArray<T> matrices) where T : unmanaged;
+
 	protected ComputeBuffer buffer;
 
 	public abstract int Stride { get; }
 	public abstract int Count { get; }
 	public abstract ComputeBufferType BufferType { get; protected set; }
+	public abstract ComputeBufferMode BufferMode { get; protected set; }
 	public ComputeBuffer Buffer => buffer;
 
 	protected bool EnsureBufferSize()
@@ -32,7 +38,7 @@ public abstract class AbstractComputeBuffer : IDisposable
 			if (Count > 0)
 			{
 				// Double buffer size whenever we exceed capacity
-				buffer = new ComputeBuffer(Count * 2, Stride, BufferType);
+				buffer = new ComputeBuffer(Count * 2, Stride, BufferType, BufferMode);
 			}
 			else
 				buffer = null;
@@ -60,15 +66,40 @@ public abstract class AbstractComputeBuffer : IDisposable
 		if (buffer != null)
 		{
 			if (reallocated)
-				SetBufferData(null);
+				SetBufferData(-1);
 			else
 				SetBufferData(subset);
 		}
 		return reallocated;
 	}
 
+	private ProfilerMarker beginWriteMatricesMarker = new ProfilerMarker(nameof(BeginWriteMatrices));
+	/// <summary>
+	/// Uses <see cref="ComputeBuffer.BeginWrite{T}(int, int)"/>
+	/// </summary>
+	/// <typeparam name="T"></typeparam>
+	/// <param name="startIndex"></param>
+	/// <param name="writeCount"></param>
+	/// <param name="del"></param>
+	/// <returns>An action which runs <see cref="ComputeBuffer.EndWrite{T}(int)"/></returns>
+	public Action BeginWriteMatrices<T>(int startIndex, int writeCount, BufferWriteDelegate<T> del) where T : unmanaged
+	{
+		if (writeCount > Count || writeCount <= 0)
+			throw new ArgumentOutOfRangeException($"{nameof(writeCount)} cannot <= 0 or > than {Count}");
+
+		beginWriteMatricesMarker.Begin();
+
+		EnsureBufferSize();
+		var array = Buffer.BeginWrite<T>(0, writeCount);
+
+		del(ref array);
+
+		beginWriteMatricesMarker.End();
+		return ()=> Buffer.EndWrite<T>(writeCount);
+	}
+
 	protected abstract void SetBufferData(DataSubset subset);
-	protected abstract void SetBufferData(int index);
+	protected abstract void SetBufferData(int index, int count = -1);
 
 	public void Dispose() 
 	{
@@ -87,48 +118,78 @@ public class GenericComputeBuffer<T> : AbstractComputeBuffer where T : struct
 	public override int Count => data.Count;
 	public override int Stride => Marshal.SizeOf<T>();
 	public override ComputeBufferType BufferType { get; protected set; }
-
-	public GenericComputeBuffer(IList<T> data, ComputeBufferType bufferType = ComputeBufferType.Default)
+	public override ComputeBufferMode BufferMode { get; protected set; }
+	public GenericComputeBuffer(
+		IList<T> data, 
+		ComputeBufferType bufferType = ComputeBufferType.Default, 
+		ComputeBufferMode mode = default)
 	{
 		this.data = data;
 		this.BufferType = bufferType;
+		this.BufferMode = mode;
 	}
 
 	protected override void SetBufferData(DataSubset subset)
 	{
+		if (subset == null)
+			throw new ArgumentNullException(nameof(subset));
+
+		SetBufferData(subset.startIndex, subset.count);
+	}
+
+	protected override void SetBufferData(int index, int count = 1)
+	{
 		if (data is T[] array)
 		{
-			if (subset != null)
-				buffer.SetData(array, subset.startIndex, subset.startIndex, subset.count);
+			if (index > -1)
+				buffer.SetData(array, index, index, count);
 			else
 				buffer.SetData(array);
 		}
 		else if (data is List<T> list)
 		{
-			if (subset != null)
-				buffer.SetData(list, subset.startIndex, subset.startIndex, subset.count);
+			if (index > -1)
+				buffer.SetData(list, index, index, count);
 			else
 				buffer.SetData(list);
 		}
 		else
 			Debug.LogError("DataBuffer unhandled collection type " + data.GetType());
 	}
+}
 
-	protected override void SetBufferData(int index)
+public class GenericNativeComputeBuffer<T> : AbstractComputeBuffer where T : struct
+{
+	private NativeArray<T> data;
+
+	public override int Count => data.Length;
+	public override int Stride => Marshal.SizeOf<T>();
+	public override ComputeBufferType BufferType { get; protected set; }
+	public override ComputeBufferMode BufferMode { get; protected set; }
+
+	public GenericNativeComputeBuffer(
+		NativeArray<T> data, 
+		ComputeBufferType bufferType = ComputeBufferType.Default, 
+		ComputeBufferMode mode = default)
 	{
-		if (data is T[] array)
-		{
-			if (index > -1)
-				buffer.SetData(array, index, index, 1);
-			else
-				buffer.SetData(array);
-		}
-		else if (data is List<T> list)
-		{
-			if (index > -1)
-				buffer.SetData(list, index, index, 1);
-			else
-				buffer.SetData(list);
-		}
+		this.data = data;
+		this.BufferType = bufferType;
+		this.BufferMode = mode;
+	}
+
+	protected override void SetBufferData(DataSubset subset)
+	{
+		if (subset == null)
+			throw new ArgumentNullException(nameof(subset));
+
+		SetBufferData(subset.startIndex, subset.count);
+	}
+
+	protected override void SetBufferData(int index, int count = 1)
+	{
+		if (index > -1)
+			buffer.SetData(data, index, index, count);
+		else
+			buffer.SetData(data);
 	}
 }

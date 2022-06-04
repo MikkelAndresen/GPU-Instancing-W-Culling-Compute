@@ -23,10 +23,6 @@ Shader "Unlit/InstancedIndirectUnlit"
 			#include "UnityLightingCommon.cginc"
 			#include "AutoLight.cginc"
 
-			struct CustomMatrix
-			{
-				float4x4 mat;
-			};
 
 #if SHADER_TARGET >= 45
 		   StructuredBuffer<uint> indexBuffer;
@@ -44,21 +40,9 @@ Shader "Unlit/InstancedIndirectUnlit"
 
 			v2f vert (appdata_full v, uint instanceID : SV_InstanceID)
 			{
-				uint index = indexBuffer[instanceID];
+				//uint index = indexBuffer[instanceID];
+				uint index = instanceID;
 				float3x4 mat = matrixBuffer[index];
-				//float3x4 mat = matrixBuffer[1];
-
-				// Testing for directly fetching matrices
-				//float3x4 mat = matrixBuffer[instanceID];
-
-				//float4x4 mat = data.mat;
-				//float4x4 mat4 = 
-				//{
-				//	float4(1,0,0,instanceID),
-				//	float4(0,1,0,instanceID),
-				//	float4(0,0,1,instanceID),
-				//	float4(1,1,1,1)
-				//};
 
 				// Convert to float4x4 and add a scale of 1
 				float4x4 mat4 = 
@@ -66,7 +50,7 @@ Shader "Unlit/InstancedIndirectUnlit"
 					mat[0],
 					mat[1],
 					mat[2],
-					float4(1,1,1,1)
+					float4(0,0,0,1)
 				};
 				
 				v.vertex = mul(mat4, v.vertex);
