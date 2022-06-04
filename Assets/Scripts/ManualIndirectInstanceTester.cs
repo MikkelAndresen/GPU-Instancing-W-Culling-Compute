@@ -33,6 +33,8 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	private bool updateAllMatrices, updateSingleMatrix, updateMatrixSubset;
 	[SerializeField]
 	private int jobInnerBatchCount = 1;
+	[SerializeField]
+	private GPUWriteMethod gpuWriteMethod = GPUWriteMethod.ParallelBatchJobCopy;
 	[SerializeField, SetProperty(nameof(matrixSubsetUpdateMarker))]
 	private int matrixUpdateSubsetCount = 10;
 	[SerializeField]
@@ -259,35 +261,47 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		}
 	}
 
+	public enum GPUWriteMethod
+	{
+		NativeArrayCopy,
+		ParallelForJobSet,
+		JobNativeArrayCopy,
+		ParallelBatchJobCopy
+	}
+
 	private void WriteAllMatrices(ref NativeArray<float3x4> array)
 	{
-		//currentGPUCopyJob = new ParallelCPUToGPUCopyJob<float3x4>()
-		//{
-		//	input = dataGen.matrices,
-		//	output = array
-		//}.Schedule(TotalCount, Mathf.Max(1, jobInnerBatchCount));
-
-		//array.CopyFrom(dataGen.matrices);
-
-		//currentGPUCopyJob = new CPUToGPUCopyJob<float3x4>()
-		//{
-		//	src = dataGen.matrices,
-		//	dst = array
-		//}.Schedule();
-
-		int length = TotalCount;
-		int batchCount = length / 4;
-		currentGPUCopyJob = new ParallelCPUToGPUCopyJob<float3x4>()
+		switch (gpuWriteMethod)
 		{
-			src = dataGen.matrices,
-			dst = array
-		}.Schedule(length, batchCount/*jobInnerBatchCount*/);
-
-		//currentGPUCopyJob = new CPUToGPUCopyJob<float3x4>()
-		//{
-		//	input = dataGen.matrices,
-		//	output = array
-		//}.Schedule(TotalCount, default);
+			case GPUWriteMethod.NativeArrayCopy:
+				array.CopyFrom(dataGen.matrices);
+				break;
+			case GPUWriteMethod.ParallelForJobSet:
+				currentGPUCopyJob = new ParallelCPUToGPUCopyJob<float3x4>()
+				{
+					src = dataGen.matrices,
+					dst = array
+				}.Schedule(TotalCount, Mathf.Max(1, jobInnerBatchCount));
+				break;
+			case GPUWriteMethod.JobNativeArrayCopy:
+				currentGPUCopyJob = new CPUToGPUCopyJob<float3x4>()
+				{
+					src = dataGen.matrices,
+					dst = array
+				}.Schedule();
+				break;
+			case GPUWriteMethod.ParallelBatchJobCopy:
+				int length = TotalCount;
+				int batchCount = length / 4;
+				currentGPUCopyJob = new ParallelCPUToGPUCopyJob<float3x4>()
+				{
+					src = dataGen.matrices,
+					dst = array
+				}.Schedule(length, batchCount/*jobInnerBatchCount*/);
+				break;
+			default:
+				break;
+		}
 	}
 
 	private ProfilerMarker pushAllMatricesMarker = new ProfilerMarker("Update Matrices and Set ComputeBuffer");
