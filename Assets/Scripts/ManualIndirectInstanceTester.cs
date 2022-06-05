@@ -3,15 +3,12 @@ using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine.Profiling;
 using UnityEngine.Rendering;
-using System.Collections.Generic;
-using Random = UnityEngine.Random;
-using Debug = UnityEngine.Debug;
 using System;
 using Unity.Jobs;
-using System.Collections;
 using Unity.Profiling;
 using System.Threading;
 using Unity.Burst;
+using System.Collections;
 
 // Sort Input matrix buffer by a priority based on how often the developer thinks they will be updated.
 // e.g if 10 objects will update often, put them in index 0 - 10.
@@ -21,6 +18,23 @@ using Unity.Burst;
 
 public class ManualIndirectInstanceTester : MonoBehaviour
 {
+	// According to this source (https://forum.unity.com/threads/clarification-on-computebuffermode-immutable.1150250/),
+	// the dynamic compute buffer mode is only for meshes and not for custom data which we use. From my own testing,
+	// I wasn't able to make dynamic work with my data. Which is why I made a custom enum for serialized setup of the test script.
+	public enum ComputeBufferWriteMode
+	{
+		Immutable,
+		SubUpdates
+	}
+
+	public enum GPUWriteMethod
+	{
+		NativeArrayCopy,
+		ParallelForJobSet,
+		JobNativeArrayCopy,
+		ParallelBatchJobCopy
+	}
+
 	[SerializeField]
 	private Mesh mesh;
 	[SerializeField]
@@ -35,14 +49,14 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	private int jobInnerBatchCount = 1;
 	[SerializeField]
 	private GPUWriteMethod gpuWriteMethod = GPUWriteMethod.ParallelBatchJobCopy;
-	[SerializeField, SetProperty(nameof(matrixSubsetUpdateMarker))]
-	private int matrixUpdateSubsetCount = 10;
 	[SerializeField]
-	private ComputeBufferMode matrixBufferMode = ComputeBufferMode.Dynamic;
+	private ComputeBufferWriteMode matrixBufferMode = ComputeBufferWriteMode.Immutable;
 	[SerializeField]
 	private ShadowCastingMode shadowCastingMode = ShadowCastingMode.On;
 	[SerializeField]
 	private bool receiveShadows = true;
+	[SerializeField, Tooltip("If checked will ensure gpu data is only uploaded at EndOfFrame rather than late update, this means that data from the current frame will only be visible next frame")]
+	private bool uploadGPUDataEndOfFrame = false;
 	[SerializeField]
 	private int dispatchX;
 	[SerializeField]
@@ -59,18 +73,10 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		get => outputBuffer;
 		set => outputBuffer = value;
 	}
+	private ComputeBufferMode MatrixBufferMode =>
+		matrixBufferMode == ComputeBufferWriteMode.Immutable ? ComputeBufferMode.Immutable : ComputeBufferMode.SubUpdates;
 	public int TotalCount => dimension * dimension * dimension;
-	public bool UseComputeBufferWriteMethod => matrixBuffer != null && matrixBuffer.BufferMode == ComputeBufferMode.SubUpdates;
-	private int MatrixUpdateSubsetCount
-	{
-		get => matrixUpdateSubsetCount;
-		set
-		{
-			matrixUpdateSubsetCount = value;
-			matrixSubsetUpdateMarker = $"Update Matrix Subset {matrixUpdateSubsetCount}";
-		}
-	}
-	private string matrixSubsetUpdateMarker = "Update Matrix Subset";
+	public bool UseSubUpdates => matrixBufferMode == ComputeBufferWriteMode.SubUpdates;
 
 	[SerializeField]
 	private Material mat;
@@ -84,11 +90,11 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	private int appendComputeKernel = -1;
 	private int threadCount = -1;
 	private Transform camTrans;
-	private List<float3x4> matrixBufferData = new List<float3x4>();
-	private List<float4> colorBufferData = new List<float4>();
-	private NativeArray<float3x4> MatrixBufferData => dataGen.matrices;
-	private NativeArray<float4> ColorBufferData => dataGen.colors;
 	private TestDataGenerator dataGen;
+	private DataSubset matrixBufferSubset = new DataSubset(0, 0);
+	private DataSubset colorBufferSubset = new DataSubset(0, 0);
+	private JobHandle currentDataJob;
+	private JobHandle currentGPUCopyJob;
 
 	protected static int computeInputID = Shader.PropertyToID("Input");
 	protected static int computeOutputID = Shader.PropertyToID("Output");
@@ -103,29 +109,32 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		serializedTotalCount = TotalCount;
 
 		appendCompute = Resources.Load<ComputeShader>("InstancingAppendCompute");
-		if(mat == null)
+		if (mat == null)
 		{
-			mat = new Material(InstancingShader);
-			mat.enableInstancing = true;
+			mat = new Material(InstancingShader)
+			{
+				//This alone doesn't actually work to set required keywords when using Graphics.DrawMeshInstancedIndirect
+				enableInstancing = true
+			};
 		}
 
 		appendComputeKernel = appendCompute.FindKernel("CSMain");
 		appendCompute.GetKernelThreadGroupSizes(appendComputeKernel, out uint x, out _, out _);
 		threadCount = (int)x;
-		camTrans = Camera.main.transform;
+		OutputBuffer = new ComputeBuffer(TotalCount, sizeof(uint), ComputeBufferType.Append);
+		OutputBuffer.SetCounterValue(1);
 
+		camTrans = Camera.main.transform;
 		dataGen = new TestDataGenerator(dimension);
 
-		matrixBuffer = new GenericNativeComputeBuffer<float3x4>(dataGen.matrices, ComputeBufferType.Default, matrixBufferMode);
+		matrixBuffer = new GenericNativeComputeBuffer<float3x4>(
+			new NativeArray<float3x4>(TotalCount, Allocator.Persistent), ComputeBufferType.Default, MatrixBufferMode);
 		colorBuffer = new GenericNativeComputeBuffer<float4>(dataGen.colors);
 
 		dataGen.RunMatrixJob(dimension, space, true, jobDeltaTime);
 		dataGen.RunColorJob(dimension, true);
-		PushAllMatrices();
-		PushAllColors();
-
-		OutputBuffer = new ComputeBuffer(TotalCount, sizeof(uint), ComputeBufferType.Append);
-		OutputBuffer.SetCounterValue(1);
+		SetMatrixBufferData();
+		SetColorBufferData();
 
 		mat.SetBuffer(materialMatrixBufferID, InputBuffer);
 		mat.SetBuffer(materialIndexBufferID, OutputBuffer);
@@ -134,46 +143,70 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		InvalidateArgumentBuffer();
 	}
 
-	private JobHandle currentDataJob;
-	private JobHandle currentGPUCopyJob;
+	// This flag is used when completing the first job which copies data to the gpu.
+	// It is used in LateUpdate for the first time because WaitForEndOfFrame doesn't seem to run the first frame,
+	// which results in multiple different vague errors either about multiple job accessing a nativearray or that the array has been deallocated.
+	private bool firstFrame = true;
+
+	private ProfilerMarker completeDataGenerationJobMarker = new ProfilerMarker("Complete Data generation");
 	void Update()
 	{
+		// We isolate the data generation so we clearly see other costs
 		completeDataGenerationJobMarker.Begin();
-		currentDataJob = dataGen.RunMatrixJob(dimension, space, completeNow: false, jobDeltaTime);
-		currentDataJob.Complete();
+		currentDataJob = dataGen.RunMatrixJob(dimension, space, completeNow: true, jobDeltaTime);
 		completeDataGenerationJobMarker.End();
 
 		// Performance tests for pushing data to GPU
-		if (TotalCount > 0)
-		{
-			if (updateAllMatrices)
-			{
-				// Use SetData Method
-				if (UseComputeBufferWriteMethod)
-					StartWriteJob();
-			}
-		}
+		if (TotalCount > 0 && updateAllMatrices)
+			StartWriteJob();
 
-		Render();
-		Thread.Sleep(10);
+		// Sleep 10ms for simulating workload on main thread,
+		// so a job may for example run parallel to the main by completing later in the frame
+		//Thread.Sleep(10);
+
+		if (uploadGPUDataEndOfFrame && !firstFrame)
+			StartCoroutine(EndOfFrameGPU_Upload());
 	}
 
-	private ProfilerMarker completeDataGenerationJobMarker = new ProfilerMarker("Complete Data generation");
+	private YieldInstruction endOfFrame = new WaitForEndOfFrame();
+	private IEnumerator EndOfFrameGPU_Upload()
+	{
+		yield return endOfFrame;
+		FinishGPU_UploadJob();
+	}
+
 	private void LateUpdate()
 	{
-		FinishGPU_UploadJob();
+		if (!uploadGPUDataEndOfFrame || firstFrame)
+		{
+			FinishGPU_UploadJob();
+			firstFrame = false;
+		}
+		Render();
+	}
+
+	private ProfilerMarker completeCopyJobMarker = new ProfilerMarker("Completed GPU Copy Job");
+	private void CompleteGPUCopyJob()
+	{
+		completeCopyJobMarker.Begin();
+		// Finish gpu copy job
+		currentGPUCopyJob.Complete();
+		completeCopyJobMarker.End();
 	}
 
 	private ProfilerMarker endGPUWriteMarker = new ProfilerMarker("Finished writing GPU data");
 	private void FinishGPU_UploadJob()
 	{
+		CompleteGPUCopyJob();
+
 		endGPUWriteMarker.Begin();
-		currentGPUCopyJob.Complete();
+		// Finish ComputeBuffer.BeginWrite
 		endBufferWrite?.Invoke();
 		endGPUWriteMarker.End();
 
-		if (!UseComputeBufferWriteMethod)
-			PushAllMatrices();
+		// ComputeBuffer.SetData
+		if (!UseSubUpdates)
+			SetMatrixBufferData();
 	}
 
 	private void InvalidateArgumentBuffer()
@@ -251,26 +284,27 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	private Action endBufferWrite;
 	private void StartWriteJob()
 	{
-		if (UseComputeBufferWriteMethod)
+		if (UseSubUpdates)
 		{
 			jobDeltaTime = Time.time - jobStartTimeSeconds;
 			jobStartTimeSeconds = Time.time;
 			beginGPUWriteMarker.Begin();
-			endBufferWrite = matrixBuffer.BeginWriteMatrices<float3x4>(0, TotalCount, WriteAllMatrices);
+			endBufferWrite = matrixBuffer.BeginWriteMatrices<float3x4>(0, TotalCount, CopyDataToGPU);
 			beginGPUWriteMarker.End();
+		}
+		else
+		{
+			// Copy test data to the gpu array
+			var array = matrixBuffer.Data;
+			CopyDataToGPU(ref array);
 		}
 	}
 
-	public enum GPUWriteMethod
+	private ProfilerMarker copyToGPUMarker = new ProfilerMarker("Copy data to GPU");
+	private void CopyDataToGPU(ref NativeArray<float3x4> array)
 	{
-		NativeArrayCopy,
-		ParallelForJobSet,
-		JobNativeArrayCopy,
-		ParallelBatchJobCopy
-	}
+		copyToGPUMarker.Begin();
 
-	private void WriteAllMatrices(ref NativeArray<float3x4> array)
-	{
 		switch (gpuWriteMethod)
 		{
 			case GPUWriteMethod.NativeArrayCopy:
@@ -297,30 +331,35 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 				{
 					src = dataGen.matrices,
 					dst = array
-				}.Schedule(length, batchCount/*jobInnerBatchCount*/);
+				}.Schedule(length, batchCount);
 				break;
 			default:
 				break;
 		}
+
+		copyToGPUMarker.End();
 	}
 
-	private ProfilerMarker pushAllMatricesMarker = new ProfilerMarker("Update Matrices and Set ComputeBuffer");
-	private void PushAllMatrices()
+	private ProfilerMarker pushAllMatricesMarker = new ProfilerMarker("ComputeBuffer.SetData");
+	private void SetMatrixBufferData()
 	{
-		var subset = new DataSubset(0, TotalCount - 1);
-
 		pushAllMatricesMarker.Begin();
-		matrixBuffer.SetData(subset);
+		if (matrixBufferSubset.count != TotalCount - 1)
+			matrixBufferSubset = new DataSubset(0, TotalCount - 1);
+
+		if (matrixBuffer.SetData(matrixBufferSubset))
+			mat.SetBuffer(materialMatrixBufferID, matrixBuffer.Buffer);
+
 		pushAllMatricesMarker.End();
 	}
 
 	private ProfilerMarker pushAllColorsMarker = new ProfilerMarker("Update Colors and Set ComputeBuffer");
-	private void PushAllColors()
+	private void SetColorBufferData()
 	{
-		var subset = new DataSubset(0, TotalCount - 1);
-
 		pushAllColorsMarker.Begin();
-		colorBuffer.SetData(subset);
+		if (colorBufferSubset.count != TotalCount - 1)
+			colorBufferSubset = new DataSubset(0, TotalCount - 1);
+		colorBuffer.SetData(colorBufferSubset);
 		pushAllColorsMarker.Begin();
 	}
 
@@ -332,6 +371,8 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		OutputBuffer.Release();
 		dataGen.Dispose();
 	}
+
+	#region Job types
 
 	[BurstCompile]
 	public struct CPUToGPUCopyJob<T> : IJob where T : unmanaged
@@ -348,8 +389,8 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	[BurstCompile]
 	public struct ParallelCPUToGPUCopyJob<T> : IJobParallelFor where T : unmanaged
 	{
-		[ReadOnly]public NativeArray<T> src;
-		[WriteOnly]public NativeArray<T> dst;
+		[ReadOnly] public NativeArray<T> src;
+		[WriteOnly] public NativeArray<T> dst;
 
 		public void Execute(int index)
 		{
@@ -380,4 +421,6 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 			dst[index] = src[index];
 		}
 	}
+
+	#endregion
 }

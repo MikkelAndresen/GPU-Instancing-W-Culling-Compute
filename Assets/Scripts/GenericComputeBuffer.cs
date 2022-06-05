@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Unity.Collections;
+using Unity.Mathematics;
 using Unity.Profiling;
 using UnityEngine;
 using UnityEngine.Profiling;
@@ -90,25 +91,39 @@ public abstract class AbstractComputeBuffer : IDisposable
 		beginWriteMatricesMarker.Begin();
 
 		EnsureBufferSize();
-		var array = Buffer.BeginWrite<T>(0, writeCount);
+		var array = Buffer.BeginWrite<T>(startIndex, writeCount);
 
 		del(ref array);
 
 		beginWriteMatricesMarker.End();
-		return ()=> Buffer.EndWrite<T>(writeCount);
+		return () =>
+		{
+			if(array.IsCreated) // Some errors have occured in the past where the array was disposed before this action was called
+				Buffer.EndWrite<T>(writeCount);
+		};
 	}
 
 	protected abstract void SetBufferData(DataSubset subset);
 	protected abstract void SetBufferData(int index, int count = -1);
 
-	public void Dispose() 
+	public void Dispose()
 	{
 		if (buffer != null)
 		{
 			buffer.Release();
 			buffer = null;
+			try
+			{
+				OnDispose();
+			}
+			catch (Exception e)
+			{
+				Debug.LogException(e);
+			}
 		}
 	}
+
+	protected virtual void OnDispose() { }
 }
 
 public class GenericComputeBuffer<T> : AbstractComputeBuffer where T : struct
@@ -120,8 +135,8 @@ public class GenericComputeBuffer<T> : AbstractComputeBuffer where T : struct
 	public override ComputeBufferType BufferType { get; protected set; }
 	public override ComputeBufferMode BufferMode { get; protected set; }
 	public GenericComputeBuffer(
-		IList<T> data, 
-		ComputeBufferType bufferType = ComputeBufferType.Default, 
+		IList<T> data,
+		ComputeBufferType bufferType = ComputeBufferType.Default,
 		ComputeBufferMode mode = default)
 	{
 		this.data = data;
@@ -161,6 +176,7 @@ public class GenericComputeBuffer<T> : AbstractComputeBuffer where T : struct
 public class GenericNativeComputeBuffer<T> : AbstractComputeBuffer where T : struct
 {
 	private NativeArray<T> data;
+	public NativeArray<T> Data => data;
 
 	public override int Count => data.Length;
 	public override int Stride => Marshal.SizeOf<T>();
@@ -168,8 +184,8 @@ public class GenericNativeComputeBuffer<T> : AbstractComputeBuffer where T : str
 	public override ComputeBufferMode BufferMode { get; protected set; }
 
 	public GenericNativeComputeBuffer(
-		NativeArray<T> data, 
-		ComputeBufferType bufferType = ComputeBufferType.Default, 
+		NativeArray<T> data,
+		ComputeBufferType bufferType = ComputeBufferType.Default,
 		ComputeBufferMode mode = default)
 	{
 		this.data = data;
@@ -191,5 +207,10 @@ public class GenericNativeComputeBuffer<T> : AbstractComputeBuffer where T : str
 			buffer.SetData(data, index, index, count);
 		else
 			buffer.SetData(data);
+	}
+
+	protected override void OnDispose()
+	{
+		data.Dispose();
 	}
 }

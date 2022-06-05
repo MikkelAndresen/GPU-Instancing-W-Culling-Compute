@@ -35,6 +35,8 @@ Shader "Unlit/InstancedIndirectUnlit"
 				float4 vertex : SV_POSITION;
 				float2 uv : TEXCOORD0;
 				uint index : TEXCOORD1;
+				float4 vColor : TEXCOORD2;
+
 				SHADOW_COORDS(4)
 			};
 
@@ -44,7 +46,7 @@ Shader "Unlit/InstancedIndirectUnlit"
 				uint index = instanceID;
 				float3x4 mat = matrixBuffer[index];
 
-				// Convert to float4x4 and add a scale of 1
+				// Convert to float4x4
 				float4x4 mat4 = 
 				{
 					mat[0],
@@ -55,6 +57,7 @@ Shader "Unlit/InstancedIndirectUnlit"
 				
 				v.vertex = mul(mat4, v.vertex);
 				v2f o;
+				float pos = mat4[1][1];
 				o.vertex = UnityObjectToClipPos(v.vertex);
 				//o.uv = TRANSFORM_TEX(v.texcoord, _MainTex);
 				o.uv = v.texcoord;

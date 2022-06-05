@@ -1,3 +1,6 @@
+// This is a custom shader built upon the URP Lit shader to work with a couple of StructuredBuffers for colors and float4x3 matrices.
+// The custom includes and this file have their changes marked with "Mikkel custom".
+// It only supports model 4.5 and is missing proper support for passes: meta, DepthNormals and Universal2D.
 Shader "Universal Render Pipeline/CustomLit"
 {
     Properties

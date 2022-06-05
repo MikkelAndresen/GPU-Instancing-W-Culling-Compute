@@ -313,9 +313,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: a79441f348de89743a2939f4d699eac1, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  m_RenderShadows: 0
-  m_RequiresDepthTextureOption: 0
-  m_RequiresOpaqueTextureOption: 0
+  m_RenderShadows: 1
+  m_RequiresDepthTextureOption: 2
+  m_RequiresOpaqueTextureOption: 2
   m_CameraType: 0
   m_Cameras: []
   m_RendererIndex: -1
@@ -380,20 +380,22 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
-  dimension: 200
+  dimension: 10
   serializedTotalCount: 0
   space: 3.5
   updateAllMatrices: 1
   updateSingleMatrix: 0
   updateMatrixSubset: 0
   jobInnerBatchCount: 2000000
+  gpuWriteMethod: 2
   matrixUpdateSubsetCount: 10
-  matrixBufferMode: 4
+  matrixBufferMode: 0
   shadowCastingMode: 1
   receiveShadows: 1
   dispatchX: 0
   jobDeltaTime: 0
   instancingShader: {fileID: 4800000, guid: 49af344732044e1449f42a6193f90479, type: 3}
+  mat: {fileID: 0}
 --- !u!4 &1360884317
 Transform:
   m_ObjectHideFlags: 0

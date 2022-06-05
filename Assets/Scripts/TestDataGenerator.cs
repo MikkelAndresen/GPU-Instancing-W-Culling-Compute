@@ -53,13 +53,14 @@ public struct GenerateMatricesJob : IJobParallelFor
 	}
 
 	public void Execute(int i) => UpdateMatrix(ref matrices, i, dimension, space, theta);
-	
+
 	public static void UpdateMatrix(ref NativeArray<float3x4> matrices, int i, int dimension, float space, float theta)
 	{
 		int3 index3D = MathUtil.Get3DIndex(i, dimension, dimension);
 		matrices[i] = TestDataGenerator.GetTransformMatrixNoScale(
 			new float3(index3D.x, index3D.y, index3D.z) * space,
 			quaternion.EulerXYZ(theta, -theta, theta));
+		//matrices[i] = TestDataGenerator.GetTransformMatrixNoScale(new float3(2, 2, 2), quaternion.identity);
 	}
 }
 
@@ -134,7 +135,15 @@ public class TestDataGenerator : IDisposable
 		Theta += deltaTime * anglePerSecond;
 
 		GenerateMatricesJob job = new GenerateMatricesJob(matrices, space, dimension, theta);
-		currentMatrixJob = job.Schedule(matrices.Length, 1);
+
+		try // We trycatch here because other jobs might be using the array
+		{
+			currentMatrixJob = job.Schedule(matrices.Length, 1);
+		}
+		catch (Exception e)
+		{
+			Debug.LogException(e);
+		}
 		if (completeNow)
 			currentMatrixJob.Complete();
 
@@ -158,7 +167,6 @@ public class TestDataGenerator : IDisposable
 	{
 		currentMatrixJob.Complete();
 		matrices.Dispose();
-		colors.Dispose();
 	}
 
 	public static float3x4 GetTransformMatrix(Transform transform)
