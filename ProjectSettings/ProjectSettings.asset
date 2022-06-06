@@ -7,7 +7,7 @@ PlayerSettings:
   productGUID: 700b2fa5cd9048141a985a03ce95e981
   AndroidProfiler: 0
   AndroidFilterTouchesWhenObscured: 0
-  AndroidEnableSustainedPerformanceMode: 0
+  AndroidEnableSustainedPerformanceMode: 1
   defaultScreenOrientation: 4
   targetDevice: 2
   useOnDemandResources: 0
