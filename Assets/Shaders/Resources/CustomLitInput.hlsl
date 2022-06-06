@@ -32,8 +32,8 @@ CBUFFER_END
 
 // Mikkel custom
 #if SHADER_TARGET >= 45
-		   StructuredBuffer<float3x4> matrixBuffer;
-		   StructuredBuffer<float4> colorBuffer;
+	StructuredBuffer<float3x4> matrixBuffer;
+	StructuredBuffer<float4> colorBuffer;
 #endif
 
 // NOTE: Do not ifdef the properties for dots instancing, but ifdef the actual usage.

@@ -1,7 +1,25 @@
 // Mikkel custom
 #if SHADER_TARGET >= 45
-		   StructuredBuffer<float3x4> matrixBuffer;
-		   StructuredBuffer<float4> colorBuffer;
+	StructuredBuffer<float3x4> matrixBuffer;
+	StructuredBuffer<float4> colorBuffer;
+	StructuredBuffer<uint> indexBuffer;
+	float4x4 GetMatrixFromInstanceID(uint instanceID) 
+	{
+		float3x4 mat = matrixBuffer[indexBuffer[instanceID]];
+		float4x4 mat4 = 
+		{
+			mat[0],
+			mat[1],
+			mat[2],
+			float4(0,0,0,1)
+		};
+		return mat4;
+	}
+
+	float4 GetColorFromInstanceID(uint instanceID)
+	{
+		return colorBuffer[indexBuffer[instanceID]];
+	}
 #endif
 
 #ifndef UNIVERSAL_FORWARD_LIT_PASS_INCLUDED
@@ -103,9 +121,8 @@ inline void InitializeStandardLitSurfaceDataWithInstanceID(float2 uv, out Surfac
 {
 	// Mikkel custom
 	#if	UNITY_ANY_INSTANCING_ENABLED 
-		_BaseColor = colorBuffer[unity_InstanceID];
+		_BaseColor = GetColorFromInstanceID(unity_InstanceID);
 	#endif
-	//_BaseColor = float4(1, 0, 0, 1);
 
     half4 albedoAlpha = SampleAlbedoAlpha(uv, TEXTURE2D_ARGS(_BaseMap, sampler_BaseMap));
     outSurfaceData.alpha = Alpha(albedoAlpha.a, _BaseColor, _Cutoff);
@@ -158,17 +175,9 @@ Varyings LitPassVertexInstanced(Attributes input, uint instanceID : SV_InstanceI
     UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
 	
 	// Mikkel custom
-	float3x4 mat = matrixBuffer[/*UNITY_GET_INSTANCE_ID(input)*/instanceID];
-	// Convert to float4x4 and add a scale of 1
-	float4x4 mat4 = 
-	{
-		mat[0],
-		mat[1],
-		mat[2],
-		float4(0,0,0,1)
-	};
+	float4x4 mat = GetMatrixFromInstanceID(instanceID);
 
-	input.positionOS = mul(mat4, input.positionOS);
+	input.positionOS = mul(mat, input.positionOS);
     VertexPositionInputs vertexInput = GetVertexPositionInputs(input.positionOS.xyz);
 
     // normalWS and tangentWS already normalize.
@@ -278,17 +287,9 @@ struct ShadowVaryings
 float4 GetShadowPositionHClip(ShadowAttributes input, uint instanceID)
 {
 	// Mikkel custom
-	float3x4 mat = matrixBuffer[/*UNITY_GET_INSTANCE_ID(input)*/instanceID];
-	// Convert to float4x4 and add a scale of 1
-	float4x4 mat4 = 
-	{
-		mat[0],
-		mat[1],
-		mat[2],
-		float4(0,0,0,1)
-	};
+	float4x4 mat = GetMatrixFromInstanceID(instanceID);
 
-	input.positionOS = mul(mat4, input.positionOS);
+	input.positionOS = mul(mat, input.positionOS);
     float3 positionWS = TransformObjectToWorld(input.positionOS.xyz);
     float3 normalWS = TransformObjectToWorldNormal(input.normalOS);
 
@@ -353,17 +354,9 @@ DepthVaryings DepthOnlyVertexInstanced(DepthAttributes input, uint instanceID : 
     UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
 
 	// Mikkel custom
-	float3x4 mat = matrixBuffer[/*UNITY_GET_INSTANCE_ID(input)*/instanceID];
-	// Convert to float4x4 and add a scale of 1
-	float4x4 mat4 = 
-	{
-		mat[0],
-		mat[1],
-		mat[2],
-		float4(0,0,0,1)
-	};
+	float4x4 mat = GetMatrixFromInstanceID(instanceID);
 
-	input.position = mul(mat4, input.position);
+	input.position = mul(mat, input.position);
     output.uv = TRANSFORM_TEX(input.texcoord, _BaseMap);
     output.positionCS = TransformObjectToHClip(input.position.xyz);
     return output;
