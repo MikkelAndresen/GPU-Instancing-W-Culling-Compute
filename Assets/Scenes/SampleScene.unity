@@ -380,18 +380,18 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
-  dimension: 10
+  dimension: 100
   serializedTotalCount: 0
   space: 3.5
   updateAllMatrices: 1
   updateSingleMatrix: 0
   updateMatrixSubset: 0
   jobInnerBatchCount: 2000000
-  gpuWriteMethod: 2
-  matrixUpdateSubsetCount: 10
-  matrixBufferMode: 0
+  gpuWriteMethod: 3
+  matrixBufferMode: 1
   shadowCastingMode: 1
   receiveShadows: 1
+  uploadGPUDataEndOfFrame: 1
   dispatchX: 0
   jobDeltaTime: 0
   instancingShader: {fileID: 4800000, guid: 49af344732044e1449f42a6193f90479, type: 3}
