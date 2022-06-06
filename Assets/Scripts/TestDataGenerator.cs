@@ -11,7 +11,7 @@ using System.Runtime.CompilerServices;
 using System.Collections.Generic;
 using Unity.Profiling;
 
-[BurstCompile]
+[BurstCompile(FloatPrecision = FloatPrecision.Low, FloatMode = FloatMode.Fast)]
 public struct GenerateColorsJob : IJobParallelFor
 {
 	[ReadOnly]
@@ -28,7 +28,7 @@ public struct GenerateColorsJob : IJobParallelFor
 	public void Execute(int index) => colors[index] = r.NextFloat4();
 }
 
-[BurstCompile]
+[BurstCompile(FloatPrecision = FloatPrecision.Low, FloatMode = FloatMode.Fast)]
 public struct GenerateMatricesJob : IJobParallelFor
 {
 	[WriteOnly]

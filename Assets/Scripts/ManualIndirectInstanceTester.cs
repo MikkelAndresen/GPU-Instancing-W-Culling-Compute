@@ -367,7 +367,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 
 	#region Job types
 
-	[BurstCompile]
+	[BurstCompile(FloatPrecision = FloatPrecision.Low, FloatMode = FloatMode.Fast)]
 	public struct CPUToGPUCopyJob<T> : IJob where T : unmanaged
 	{
 		[ReadOnly] public NativeArray<T> src;
@@ -379,7 +379,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		}
 	}
 
-	[BurstCompile]
+	[BurstCompile(FloatPrecision = FloatPrecision.Low, FloatMode = FloatMode.Fast)]
 	public struct ParallelCPUToGPUCopyJob<T> : IJobParallelFor where T : unmanaged
 	{
 		[ReadOnly] public NativeArray<T> src;
@@ -391,7 +391,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		}
 	}
 
-	[BurstCompile]
+	[BurstCompile(FloatPrecision = FloatPrecision.Low, FloatMode = FloatMode.Fast)]
 	public struct BatchParallelCPUToGPUCopyJob<T> : IJobParallelForBatch where T : unmanaged
 	{
 		[ReadOnly] public NativeArray<T> src;
@@ -403,7 +403,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		}
 	}
 
-	[BurstCompile]
+	[BurstCompile(FloatPrecision = FloatPrecision.Low, FloatMode = FloatMode.Fast)]
 	public struct CPUToGPUCopyForJob<T> : IJobFor where T : unmanaged
 	{
 		[ReadOnly] public NativeArray<T> src;
