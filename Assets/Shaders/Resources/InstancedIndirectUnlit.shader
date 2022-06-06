@@ -42,8 +42,8 @@ Shader "Unlit/InstancedIndirectUnlit"
 
 			v2f vert (appdata_full v, uint instanceID : SV_InstanceID)
 			{
-				//uint index = indexBuffer[instanceID];
-				uint index = instanceID;
+				//uint index = indexBuffer[instanceID]; // Culling based instancing
+				uint index = instanceID; // Normal instancing
 				float3x4 mat = matrixBuffer[index];
 
 				// Convert to float4x4

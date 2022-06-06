@@ -66,13 +66,9 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	private Shader instancingShader;
 	private Shader InstancingShader => instancingShader == null ? Shader.Find("Unlit/InstancedIndirectUnlit") : instancingShader;
 
-	private ComputeBuffer InputBuffer => matrixBuffer.Buffer;
-	private ComputeBuffer outputBuffer;
-	private ComputeBuffer OutputBuffer
-	{
-		get => outputBuffer;
-		set => outputBuffer = value;
-	}
+	private ComputeBuffer InputBuffer => matrixInputBuffer.Buffer;
+	private ComputeBuffer OutputBuffer => matrixOutputBuffer.Buffer;
+
 	private ComputeBufferMode MatrixBufferMode =>
 		matrixBufferMode == ComputeBufferWriteMode.Immutable ? ComputeBufferMode.Immutable : ComputeBufferMode.SubUpdates;
 	public int TotalCount => dimension * dimension * dimension;
@@ -84,7 +80,8 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	private uint[] args;
 	private ComputeBuffer argsBuffer;
 
-	private GenericNativeComputeBuffer<float3x4> matrixBuffer;
+	private GenericNativeComputeBuffer<float3x4> matrixInputBuffer;
+	private GenericNativeComputeBuffer<uint> matrixOutputBuffer;
 	private GenericNativeComputeBuffer<float4> colorBuffer;
 	private ComputeShader appendCompute;
 	private int appendComputeKernel = -1;
@@ -121,13 +118,13 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		appendComputeKernel = appendCompute.FindKernel("CSMain");
 		appendCompute.GetKernelThreadGroupSizes(appendComputeKernel, out uint x, out _, out _);
 		threadCount = (int)x;
-		OutputBuffer = new ComputeBuffer(TotalCount, sizeof(uint), ComputeBufferType.Append);
+		matrixOutputBuffer = new GenericNativeComputeBuffer<uint>(new NativeArray<uint>(TotalCount, Allocator.Persistent), ComputeBufferType.Append);
 		OutputBuffer.SetCounterValue(1);
 
 		camTrans = Camera.main.transform;
 		dataGen = new TestDataGenerator(dimension);
 
-		matrixBuffer = new GenericNativeComputeBuffer<float3x4>(
+		matrixInputBuffer = new GenericNativeComputeBuffer<float3x4>(
 			new NativeArray<float3x4>(TotalCount, Allocator.Persistent), ComputeBufferType.Default, MatrixBufferMode);
 		colorBuffer = new GenericNativeComputeBuffer<float4>(dataGen.colors);
 
@@ -185,30 +182,6 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		Render();
 	}
 
-	private ProfilerMarker completeCopyJobMarker = new ProfilerMarker("Completed GPU Copy Job");
-	private void CompleteGPUCopyJob()
-	{
-		completeCopyJobMarker.Begin();
-		// Finish gpu copy job
-		currentGPUCopyJob.Complete();
-		completeCopyJobMarker.End();
-	}
-
-	private ProfilerMarker endGPUWriteMarker = new ProfilerMarker("Finished writing GPU data");
-	private void FinishGPU_UploadJob()
-	{
-		CompleteGPUCopyJob();
-
-		endGPUWriteMarker.Begin();
-		// Finish ComputeBuffer.BeginWrite
-		endBufferWrite?.Invoke();
-		endGPUWriteMarker.End();
-
-		// ComputeBuffer.SetData
-		if (!UseSubUpdates)
-			SetMatrixBufferData();
-	}
-
 	private void InvalidateArgumentBuffer()
 	{
 		args = new uint[]
@@ -227,13 +200,15 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	{
 		//Graphics.CreateAsyncGraphicsFence
 		// Copy count about 
-		//ComputeBuffer.CopyCount(OutputBuffer, argsBuffer, 4);
+		ComputeBuffer.CopyCount(OutputBuffer, argsBuffer, 4);
 	}
 
 	private ProfilerMarker renderMarker = new ProfilerMarker("Do Render");
 	public void Render()
 	{
 		renderMarker.Begin();
+
+		UpdateAppendCountInArgs();
 
 		//DispatchCompute();
 		//UpdateAppendCountInArgs();
@@ -255,31 +230,6 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		renderMarker.End();
 	}
 
-	private GraphicsFence computeFence;
-	private void DispatchCompute()
-	{
-		// Because of the nature of async behaviour of jobs,
-		// we don't know when matrixBuffer.Buffer is setup
-		if (matrixBuffer.Buffer == null)
-			return;
-
-		Profiler.BeginSample(nameof(DispatchCompute));
-		//computeFence = Graphics.CreateGraphicsFence(GraphicsFenceType.AsyncQueueSynchronisation, SynchronisationStageFlags.ComputeProcessing);
-
-		OutputBuffer.SetCounterValue(0);
-		appendCompute.SetBuffer(appendComputeKernel, computeInputID, matrixBuffer.Buffer);
-		appendCompute.SetBuffer(appendComputeKernel, computeOutputID, OutputBuffer);
-		appendCompute.SetInt(lengthID, TotalCount);
-		appendCompute.SetVector(cameraPosID, camTrans.position);
-
-		dispatchX = Mathf.Min((TotalCount + threadCount - 1) / threadCount, 65535);
-		appendCompute.Dispatch(appendComputeKernel, dispatchX, 1, 1);
-
-		//Graphics.WaitOnAsyncGraphicsFence(computeFence);
-
-		Profiler.EndSample();
-	}
-
 	private ProfilerMarker beginGPUWriteMarker = new ProfilerMarker("BeginGPU Write");
 	private Action endBufferWrite;
 	private void StartWriteJob()
@@ -289,13 +239,13 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 			jobDeltaTime = Time.time - jobStartTimeSeconds;
 			jobStartTimeSeconds = Time.time;
 			beginGPUWriteMarker.Begin();
-			endBufferWrite = matrixBuffer.BeginWriteMatrices<float3x4>(0, TotalCount, CopyDataToGPU);
+			endBufferWrite = matrixInputBuffer.BeginWriteMatrices<float3x4>(0, TotalCount, CopyDataToGPU);
 			beginGPUWriteMarker.End();
 		}
 		else
 		{
 			// Copy test data to the gpu array
-			var array = matrixBuffer.Data;
+			var array = matrixInputBuffer.Data;
 			CopyDataToGPU(ref array);
 		}
 	}
@@ -340,6 +290,54 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		copyToGPUMarker.End();
 	}
 
+	private ProfilerMarker completeCopyJobMarker = new ProfilerMarker("Completed GPU Copy Job");
+	private void CompleteGPUCopyJob()
+	{
+		completeCopyJobMarker.Begin();
+		// Finish gpu copy job
+		currentGPUCopyJob.Complete();
+		completeCopyJobMarker.End();
+	}
+
+	private ProfilerMarker endGPUWriteMarker = new ProfilerMarker("Finished writing GPU data");
+	private void FinishGPU_UploadJob()
+	{
+		CompleteGPUCopyJob();
+
+		endGPUWriteMarker.Begin();
+		// Finish ComputeBuffer.BeginWrite
+		endBufferWrite?.Invoke();
+		endGPUWriteMarker.End();
+
+		// ComputeBuffer.SetData
+		if (!UseSubUpdates)
+			SetMatrixBufferData();
+
+		// Dispatch culling compute after we've uploaded the matrices
+		DispatchCompute();
+	}
+
+	//private GraphicsFence computeFence;
+	private ProfilerMarker dispatchComputeMarker = new ProfilerMarker("Dispatch Culling Compute");
+	private void DispatchCompute()
+	{
+		dispatchComputeMarker.Begin();
+		//computeFence = Graphics.CreateGraphicsFence(GraphicsFenceType.AsyncQueueSynchronisation, SynchronisationStageFlags.ComputeProcessing);
+
+		OutputBuffer.SetCounterValue(0);
+		appendCompute.SetBuffer(appendComputeKernel, computeInputID, InputBuffer);
+		appendCompute.SetBuffer(appendComputeKernel, computeOutputID, OutputBuffer);
+		appendCompute.SetInt(lengthID, TotalCount);
+		appendCompute.SetVector(cameraPosID, camTrans.position);
+
+		dispatchX = Mathf.Min((TotalCount + threadCount - 1) / threadCount, 65535);
+		appendCompute.Dispatch(appendComputeKernel, dispatchX, 1, 1);
+
+		//Graphics.WaitOnAsyncGraphicsFence(computeFence);
+
+		dispatchComputeMarker.End();
+	}
+
 	private ProfilerMarker pushAllMatricesMarker = new ProfilerMarker("ComputeBuffer.SetData");
 	private void SetMatrixBufferData()
 	{
@@ -347,8 +345,8 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		if (matrixBufferSubset.count != TotalCount - 1)
 			matrixBufferSubset = new DataSubset(0, TotalCount - 1);
 
-		if (matrixBuffer.SetData(matrixBufferSubset))
-			mat.SetBuffer(materialMatrixBufferID, matrixBuffer.Buffer);
+		if (matrixInputBuffer.SetData(matrixBufferSubset))
+			mat.SetBuffer(materialMatrixBufferID, matrixInputBuffer.Buffer);
 
 		pushAllMatricesMarker.End();
 	}
@@ -365,10 +363,10 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 
 	private void OnDestroy()
 	{
-		matrixBuffer.Dispose();
+		matrixInputBuffer.Dispose();
 		colorBuffer.Dispose();
 		argsBuffer.Release();
-		OutputBuffer.Release();
+		matrixOutputBuffer.Dispose();
 		dataGen.Dispose();
 	}
 
