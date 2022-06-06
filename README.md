@@ -18,3 +18,5 @@ InstancedIndirectUnlit.shader and CustomLitShader.shader
 The unlit is built from scratch for testing the most basic things, while the lit is derived from URP lit and is basically just hacked to take a matrix, color and index buffer.
 
 There is also a few utility classes used for making it easier to use compute buffers inside the GenericComputeBuffer.cs file.
+
+I've tested this project on PC using a 5950x and Android using a snapdragon 845.
