@@ -668,7 +668,7 @@ MonoBehaviour:
   shadowCastingMode: 1
   receiveShadows: 1
   uploadDataStartOfNextFrame: 1
-  instancingShader: {fileID: 4800000, guid: 66fe9278b2035bb4e99ad6ff17c8e4c8, type: 3}
+  instancingShader: {fileID: 4800000, guid: 49af344732044e1449f42a6193f90479, type: 3}
 --- !u!4 &1360884317
 Transform:
   m_ObjectHideFlags: 0
