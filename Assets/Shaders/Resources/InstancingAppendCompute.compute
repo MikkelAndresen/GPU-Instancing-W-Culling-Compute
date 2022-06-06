@@ -26,6 +26,7 @@ void CSMain (uint3 id : SV_DispatchThreadID)
 
 	for (int i = 0; i < 6; i++)
 	{
+		// TODO Add more plane comparisons for AABB and spheres
 		float d0 = dot(pos, _FrustumPlanes[i].normal) + _FrustumPlanes[i].distance;
 
 		if (d0 < 0)
