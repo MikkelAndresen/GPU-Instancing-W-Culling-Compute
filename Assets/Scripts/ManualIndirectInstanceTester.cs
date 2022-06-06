@@ -79,10 +79,10 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	private ShadowCastingMode shadowCastingMode = ShadowCastingMode.On;
 	[SerializeField]
 	private bool receiveShadows = true;
-	[SerializeField, SetProperty(nameof(UploadDataStartOfNextFrame)), 
+	[SerializeField, SetProperty(nameof(UploadDataStartOfNextFrame)),
 	Tooltip("If checked will make sure jobs only complete at the beginning of next frame, this can improve performance but increases latency")]
 	private bool uploadDataStartOfNextFrame = false;
-	public bool UploadDataStartOfNextFrame 
+	public bool UploadDataStartOfNextFrame
 	{
 		get => uploadDataStartOfNextFrame;
 		set
@@ -114,15 +114,32 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	private ComputeBuffer frustumPlaneBuffer;
 	private Plane[] frustumPlanes = new Plane[6];
 	private GenericNativeComputeBuffer<float4> colorBuffer;
-	private ComputeShader appendCompute;
-	private int appendComputeKernel = -1;
-	private int threadCount = -1;
+	private ComputeShader cullingCompute;
+	private ComputeShader CullingCompute => cullingCompute == null || cullingCompute.Equals(null) ?
+		cullingCompute = Resources.Load<ComputeShader>("MatrixFrustumCullingCompute") : cullingCompute;
+
+	private int cullingComputeKernel = int.MaxValue;
+	private int CullingComputeKernel => cullingComputeKernel == int.MaxValue ? CullingCompute.FindKernel("CSMain") : cullingComputeKernel;
+	private int threadCount = int.MaxValue;
+	public int ThreadCount
+	{
+		get
+		{
+			if (threadCount == int.MaxValue)
+			{
+				CullingCompute.GetKernelThreadGroupSizes(CullingComputeKernel, out uint x, out _, out _);
+				threadCount = (int)x;
+			}
+			return threadCount;
+		}
+	}
+
 	private Camera mainCam;
 	private TestDataGenerator dataGen;
 	private DataSubset matrixBufferSubset = new DataSubset(0, 0);
 	private DataSubset colorBufferSubset = new DataSubset(0, 0);
 	private JobHandle currentGPUCopyJob;
-	private int dispatchX;
+	private int DispatchX => Mathf.Min((TotalCount + ThreadCount - 1) / ThreadCount, 65535);
 
 	protected static int computeInputID = Shader.PropertyToID("Input");
 	protected static int computeOutputID = Shader.PropertyToID("Output");
@@ -138,7 +155,6 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	{
 		serializedTotalCount = TotalCount;
 
-		appendCompute = Resources.Load<ComputeShader>("InstancingAppendCompute");
 		if (mat == null)
 		{
 			mat = new Material(InstancingShader)
@@ -150,9 +166,6 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 			};
 		}
 
-		appendComputeKernel = appendCompute.FindKernel("CSMain");
-		appendCompute.GetKernelThreadGroupSizes(appendComputeKernel, out uint x, out _, out _);
-		threadCount = (int)x;
 		indexOutputBuffer = new GenericNativeComputeBuffer<uint>(new NativeArray<uint>(TotalCount, Allocator.Persistent), ComputeBufferType.Append);
 
 		mainCam = Camera.main;
@@ -369,16 +382,15 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		dispatchComputeMarker.Begin();
 
 		indexOutputBuffer.Buffer.SetCounterValue(0);
-		appendCompute.SetBuffer(appendComputeKernel, computeInputID, matrixInputBuffer.Buffer); // Matrices
-		appendCompute.SetBuffer(appendComputeKernel, computeOutputID, indexOutputBuffer.Buffer); // Indices
-		appendCompute.SetBuffer(appendComputeKernel, frustumBufferID, frustumPlaneBuffer); // Frustum planes
+		CullingCompute.SetBuffer(CullingComputeKernel, computeInputID, matrixInputBuffer.Buffer); // Matrices
+		CullingCompute.SetBuffer(CullingComputeKernel, computeOutputID, indexOutputBuffer.Buffer); // Indices
+		CullingCompute.SetBuffer(CullingComputeKernel, frustumBufferID, frustumPlaneBuffer); // Frustum planes
 
-		appendCompute.SetInt(lengthID, TotalCount);
-		appendCompute.SetVector(cameraPosID, mainCam.transform.position);
-		appendCompute.SetFloat(maxDistanceID, 100f);
+		CullingCompute.SetInt(lengthID, TotalCount);
+		CullingCompute.SetVector(cameraPosID, mainCam.transform.position);
+		CullingCompute.SetFloat(maxDistanceID, 100f);
 
-		dispatchX = Mathf.Min((TotalCount + threadCount - 1) / threadCount, 65535);
-		appendCompute.Dispatch(appendComputeKernel, dispatchX, 1, 1);
+		CullingCompute.Dispatch(CullingComputeKernel, DispatchX, 1, 1);
 
 		dispatchComputeMarker.End();
 	}
