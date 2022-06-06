@@ -573,13 +573,13 @@ Transform:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 963194225}
-  m_LocalRotation: {x: 0.24106662, y: 0.19658086, z: 0.049931694, w: 0.9490783}
-  m_LocalPosition: {x: 12.9, y: 28.9, z: -2.5}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_Children: []
   m_Father: {fileID: 0}
   m_RootOrder: 0
-  m_LocalEulerAnglesHint: {x: 25.973, y: 26.221, z: 12.172}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &963194229
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -659,17 +659,15 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
-  dimension: 50
+  dimension: 100
   serializedTotalCount: 0
   space: 3.5
-  updateAllMatrices: 1
   jobBatchDiv: 10
-  gpuWriteMethod: 3
-  matrixBufferMode: 1
+  gpuCopyMethod: 3
+  matrixBufferWriteMethod: 1
   shadowCastingMode: 1
   receiveShadows: 1
   uploadDataStartOfNextFrame: 1
-  dispatchX: 0
   instancingShader: {fileID: 4800000, guid: 66fe9278b2035bb4e99ad6ff17c8e4c8, type: 3}
 --- !u!4 &1360884317
 Transform:
