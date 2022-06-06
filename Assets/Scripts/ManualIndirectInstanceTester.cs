@@ -67,7 +67,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	private Shader InstancingShader => instancingShader == null ? Shader.Find("Unlit/InstancedIndirectUnlit") : instancingShader;
 
 	private ComputeBuffer InputBuffer => matrixInputBuffer.Buffer;
-	private ComputeBuffer OutputBuffer => matrixOutputBuffer.Buffer;
+	private ComputeBuffer OutputBuffer => indexOutputBuffer.Buffer;
 
 	private ComputeBufferMode MatrixBufferMode =>
 		matrixBufferMode == ComputeBufferWriteMode.Immutable ? ComputeBufferMode.Immutable : ComputeBufferMode.SubUpdates;
@@ -81,7 +81,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	private ComputeBuffer argsBuffer;
 
 	private GenericNativeComputeBuffer<float3x4> matrixInputBuffer;
-	private GenericNativeComputeBuffer<uint> matrixOutputBuffer;
+	private GenericNativeComputeBuffer<uint> indexOutputBuffer;
 	private GenericNativeComputeBuffer<float4> colorBuffer;
 	private ComputeShader appendCompute;
 	private int appendComputeKernel = -1;
@@ -90,7 +90,6 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	private TestDataGenerator dataGen;
 	private DataSubset matrixBufferSubset = new DataSubset(0, 0);
 	private DataSubset colorBufferSubset = new DataSubset(0, 0);
-	private JobHandle currentDataJob;
 	private JobHandle currentGPUCopyJob;
 
 	protected static int computeInputID = Shader.PropertyToID("Input");
@@ -100,6 +99,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	protected static int materialMatrixBufferID = Shader.PropertyToID("matrixBuffer");
 	protected static int materialIndexBufferID = Shader.PropertyToID("indexBuffer");
 	protected static int colorBufferID = Shader.PropertyToID("colorBuffer");
+	protected static int maxDistanceID = Shader.PropertyToID("_MaxDistance");
 
 	void Start()
 	{
@@ -118,8 +118,8 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		appendComputeKernel = appendCompute.FindKernel("CSMain");
 		appendCompute.GetKernelThreadGroupSizes(appendComputeKernel, out uint x, out _, out _);
 		threadCount = (int)x;
-		matrixOutputBuffer = new GenericNativeComputeBuffer<uint>(new NativeArray<uint>(TotalCount, Allocator.Persistent), ComputeBufferType.Append);
-		OutputBuffer.SetCounterValue(1);
+		indexOutputBuffer = new GenericNativeComputeBuffer<uint>(new NativeArray<uint>(TotalCount, Allocator.Persistent), ComputeBufferType.Append);
+		//OutputBuffer.SetCounterValue(0);
 
 		camTrans = Camera.main.transform;
 		dataGen = new TestDataGenerator(dimension);
@@ -133,8 +133,8 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		SetMatrixBufferData();
 		SetColorBufferData();
 
-		mat.SetBuffer(materialMatrixBufferID, InputBuffer);
-		mat.SetBuffer(materialIndexBufferID, OutputBuffer);
+		mat.SetBuffer(materialMatrixBufferID, matrixInputBuffer.Buffer);
+		mat.SetBuffer(materialIndexBufferID, indexOutputBuffer.Buffer);
 		mat.SetBuffer(colorBufferID, colorBuffer.Buffer);
 
 		InvalidateArgumentBuffer();
@@ -150,7 +150,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	{
 		// We isolate the data generation so we clearly see other costs
 		completeDataGenerationJobMarker.Begin();
-		currentDataJob = dataGen.RunMatrixJob(dimension, space, completeNow: true, jobDeltaTime);
+		dataGen.RunMatrixJob(dimension, space, completeNow: true, jobDeltaTime);
 		completeDataGenerationJobMarker.End();
 
 		// Performance tests for pushing data to GPU
@@ -210,8 +210,6 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 
 		UpdateAppendCountInArgs();
 
-		//DispatchCompute();
-		//UpdateAppendCountInArgs();
 		Graphics.DrawMeshInstancedIndirect(
 				mesh,
 				submeshIndex: 0,
@@ -316,7 +314,8 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		// Dispatch culling compute after we've uploaded the matrices
 		DispatchCompute();
 	}
-
+	[SerializeField]
+	private float maxDist = 100;
 	//private GraphicsFence computeFence;
 	private ProfilerMarker dispatchComputeMarker = new ProfilerMarker("Dispatch Culling Compute");
 	private void DispatchCompute()
@@ -325,10 +324,11 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		//computeFence = Graphics.CreateGraphicsFence(GraphicsFenceType.AsyncQueueSynchronisation, SynchronisationStageFlags.ComputeProcessing);
 
 		OutputBuffer.SetCounterValue(0);
-		appendCompute.SetBuffer(appendComputeKernel, computeInputID, InputBuffer);
-		appendCompute.SetBuffer(appendComputeKernel, computeOutputID, OutputBuffer);
+		appendCompute.SetBuffer(appendComputeKernel, computeInputID, matrixInputBuffer.Buffer); // Matrices
+		appendCompute.SetBuffer(appendComputeKernel, computeOutputID, indexOutputBuffer.Buffer); // Indices
 		appendCompute.SetInt(lengthID, TotalCount);
 		appendCompute.SetVector(cameraPosID, camTrans.position);
+		appendCompute.SetFloat(maxDistanceID, maxDist);
 
 		dispatchX = Mathf.Min((TotalCount + threadCount - 1) / threadCount, 65535);
 		appendCompute.Dispatch(appendComputeKernel, dispatchX, 1, 1);
@@ -366,7 +366,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		matrixInputBuffer.Dispose();
 		colorBuffer.Dispose();
 		argsBuffer.Release();
-		matrixOutputBuffer.Dispose();
+		indexOutputBuffer.Dispose();
 		dataGen.Dispose();
 	}
 
