@@ -10,6 +10,7 @@ It utilizes a compute shader called MatrixFrustumCullingCompute.compute in order
 It also calls the DrawMeshInstancedIndirect method using a material with the matrix buffer.
 From the inspector of this script you can choose how the matrix data upload happens, when it happens and other render settings.
 This settings all work during runtime, except for the Dimension and spacing (I might add that later) which is how many matrices are to be generated.
+Note: The MatrixFrustumCullingCompute shader is very basic and is limited to testing the position part of a matrix against each plane, there is no AABB or sphere testing as of yet.
 
 There are two shaders supported with this instancing system:
 InstancedIndirectUnlit.shader and CustomLitShader.shader
