@@ -184,6 +184,11 @@ public class GenericNativeComputeBuffer<T> : AbstractComputeBuffer where T : str
 {
 	private NativeArray<T> data;
 	public NativeArray<T> Data => data;
+	public T this[int index] 
+	{ 
+		get => data[index]; 
+		set => data[index] = value; 
+	}
 
 	public override int Count => data.Length;
 	public override int Stride => Marshal.SizeOf<T>();
