@@ -29,7 +29,14 @@ public abstract class AbstractComputeBuffer : IDisposable
 	public abstract int Count { get; }
 	public abstract ComputeBufferType BufferType { get; protected set; }
 	public abstract ComputeBufferMode BufferMode { get; protected set; }
-	public ComputeBuffer Buffer => buffer;
+	public ComputeBuffer Buffer 
+	{
+		get
+		{
+			EnsureBufferSize();
+			return buffer;
+		}
+	}
 
 	protected bool EnsureBufferSize()
 	{
