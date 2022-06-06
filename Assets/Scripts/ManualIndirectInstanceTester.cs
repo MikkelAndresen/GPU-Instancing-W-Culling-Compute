@@ -41,30 +41,68 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	private int serializedTotalCount;
 	[SerializeField]
 	private float space = 1.5f;
-	[SerializeField]
-	private bool updateAllMatrices;
+
 	[SerializeField]
 	private int jobBatchDiv = 10;
-	[SerializeField]
-	private GPUWriteMethod gpuWriteMethod = GPUWriteMethod.ParallelBatchJobCopy;
-	[SerializeField]
-	private ComputeBufferWriteMode matrixBufferMode = ComputeBufferWriteMode.Immutable;
+	[SerializeField, SetProperty(nameof(GPUCopyMethod))]
+	private GPUWriteMethod gpuCopyMethod = GPUWriteMethod.ParallelBatchJobCopy;
+	public GPUWriteMethod GPUCopyMethod
+	{
+		get => gpuCopyMethod;
+		set
+		{
+			if (!Application.isPlaying)
+				return;
+
+			FinishGPU_UploadJob();
+			gpuCopyMethod = value;
+		}
+	}
+
+	[SerializeField, SetProperty(nameof(MatrixBufferWriteMethod))]
+	private ComputeBufferWriteMode matrixBufferWriteMethod = ComputeBufferWriteMode.Immutable;
+	public ComputeBufferWriteMode MatrixBufferWriteMethod
+	{
+		get => matrixBufferWriteMethod;
+		set
+		{
+			if (!Application.isPlaying)
+				return;
+
+			FinishGPU_UploadJob();
+			InvalidateMatrixBuffer();
+			matrixBufferWriteMethod = value;
+		}
+	}
+
 	[SerializeField]
 	private ShadowCastingMode shadowCastingMode = ShadowCastingMode.On;
 	[SerializeField]
 	private bool receiveShadows = true;
-	[SerializeField, Tooltip("If checked will make sure jobs only complete at the beginning of next frame, this can improve performance but increases latency")]
+	[SerializeField, SetProperty(nameof(UploadDataStartOfNextFrame)), 
+	Tooltip("If checked will make sure jobs only complete at the beginning of next frame, this can improve performance but increases latency")]
 	private bool uploadDataStartOfNextFrame = false;
-	[SerializeField]
-	private int dispatchX;
+	public bool UploadDataStartOfNextFrame 
+	{
+		get => uploadDataStartOfNextFrame;
+		set
+		{
+			if (!Application.isPlaying)
+				return;
+
+			FinishGPU_UploadJob();
+			uploadDataStartOfNextFrame = value;
+		}
+	}
+
 	[SerializeField]
 	private Shader instancingShader;
 	private Shader InstancingShader => instancingShader == null ? Shader.Find("Unlit/InstancedIndirectUnlit") : instancingShader;
 
 	private ComputeBufferMode MatrixBufferMode =>
-		matrixBufferMode == ComputeBufferWriteMode.Immutable ? ComputeBufferMode.Immutable : ComputeBufferMode.SubUpdates;
+		matrixBufferWriteMethod == ComputeBufferWriteMode.Immutable ? ComputeBufferMode.Immutable : ComputeBufferMode.SubUpdates;
 	public int TotalCount => dimension * dimension * dimension;
-	public bool UseSubUpdates => matrixBufferMode == ComputeBufferWriteMode.SubUpdates;
+	public bool UseSubUpdates => matrixBufferWriteMethod == ComputeBufferWriteMode.SubUpdates;
 
 	private Bounds bounds = new Bounds(Vector3.zero, Vector3.one * 10000);
 	private uint[] args;
@@ -84,6 +122,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	private DataSubset matrixBufferSubset = new DataSubset(0, 0);
 	private DataSubset colorBufferSubset = new DataSubset(0, 0);
 	private JobHandle currentGPUCopyJob;
+	private int dispatchX;
 
 	protected static int computeInputID = Shader.PropertyToID("Input");
 	protected static int computeOutputID = Shader.PropertyToID("Output");
@@ -105,6 +144,8 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 			mat = new Material(InstancingShader)
 			{
 				//This alone doesn't actually work to set required keywords when using Graphics.DrawMeshInstancedIndirect
+				// Instancing keywords are required for the CustomLit shader as I use the builtin unity_InstanceID field.
+				// Those required keywords are somehow provided when I add a setup function to each shader pass, see the CustomLit.shader file for details.
 				enableInstancing = true
 			};
 		}
@@ -117,34 +158,49 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		mainCam = Camera.main;
 		dataGen = new TestDataGenerator(dimension);
 
-		matrixInputBuffer = new GenericNativeComputeBuffer<float3x4>(
-			new NativeArray<float3x4>(TotalCount, Allocator.Persistent), ComputeBufferType.Default, MatrixBufferMode);
 		colorBuffer = new GenericNativeComputeBuffer<float4>(dataGen.colors);
 		frustumPlaneBuffer = new ComputeBuffer(6, Marshal.SizeOf(typeof(Plane)));
+		InvalidateMatrixBuffer();
 
+		// Set all inital data
 		dataGen.RunMatrixJob(dimension, space, true, Time.deltaTime);
 		dataGen.RunColorJob(dimension, true);
 		SetMatrixBufferData();
 		SetColorBufferData();
 
-		mat.SetBuffer(materialMatrixBufferID, matrixInputBuffer.Buffer);
 		mat.SetBuffer(materialIndexBufferID, indexOutputBuffer.Buffer);
 		mat.SetBuffer(colorBufferID, colorBuffer.Buffer);
 
+		// Set initial argument buffer for DrawMeshInstancedIndirect
 		InvalidateArgumentBuffer();
 	}
 
-	// According to this source https://docs.unity3d.com/Manual/ExecutionOrder.html coroutines won't execute until the next frame.
-	// Which means if we use it in Start, we won't get a callback until the next frame and so need to force complete our jobs the first time.
-	private bool firstFrame = true;
+	private void InvalidateMatrixBuffer()
+	{
+		if (matrixInputBuffer != null)
+			matrixInputBuffer.Dispose();
 
-	private ProfilerMarker completeDataGenerationJobMarker = new ProfilerMarker("Complete Data generation");
+		matrixInputBuffer = new GenericNativeComputeBuffer<float3x4>(
+			new NativeArray<float3x4>(TotalCount, Allocator.Persistent), ComputeBufferType.Default, MatrixBufferMode);
+		SetMatrixBufferData();
+		mat.SetBuffer(materialMatrixBufferID, matrixInputBuffer.Buffer);
+	}
+
+	private readonly ProfilerMarker completeDataGenerationJobMarker = new ProfilerMarker("Complete Data generation");
 	void Update()
 	{
+		// This is safe no matter what our condition as we always want this finished by this point
+		// and there is no harm if it's already finished.
+		// It also means that forced updates from the editor (which can happen when interacting with the inspector),
+		// can't cause issues with arrays used in this job and the testData generate job.
+		CompleteGPUCopyJob();
+
 		if (uploadDataStartOfNextFrame)
 		{
 			FinishGPU_UploadJob();
 			DispatchCompute();
+			if (!UseSubUpdates)
+				SetBufferData();
 		}
 
 		// We isolate the data generation so we clearly see other costs
@@ -153,7 +209,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		completeDataGenerationJobMarker.End();
 
 		// Performance tests for pushing data to GPU
-		if (TotalCount > 0 && updateAllMatrices)
+		if (TotalCount > 0)
 			StartWriteJob();
 	}
 
@@ -165,10 +221,9 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 
 			// Dispatch culling compute after we've uploaded the matrices
 			DispatchCompute();
+			if (!UseSubUpdates)
+				SetBufferData();
 		}
-
-		if (!UseSubUpdates)
-			SetBufferData();
 
 		Render();
 	}
@@ -193,7 +248,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		ComputeBuffer.CopyCount(indexOutputBuffer.Buffer, argsBuffer, 4);
 	}
 
-	private ProfilerMarker renderMarker = new ProfilerMarker("Do Render");
+	private readonly ProfilerMarker renderMarker = new ProfilerMarker("Do Render");
 	public void Render()
 	{
 		renderMarker.Begin();
@@ -218,7 +273,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		renderMarker.End();
 	}
 
-	private ProfilerMarker beginGPUWriteMarker = new ProfilerMarker("BeginGPU Write");
+	private readonly ProfilerMarker beginGPUWriteMarker = new ProfilerMarker("BeginGPU Write");
 	private Action endBufferWrite;
 	private void StartWriteJob()
 	{
@@ -236,12 +291,12 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		}
 	}
 
-	private ProfilerMarker copyToGPUMarker = new ProfilerMarker("Copy data to GPU");
+	private readonly ProfilerMarker copyToGPUMarker = new ProfilerMarker("Copy data to GPU");
 	private void CopyDataToGPU(ref NativeArray<float3x4> array)
 	{
 		copyToGPUMarker.Begin();
 
-		switch (gpuWriteMethod)
+		switch (gpuCopyMethod)
 		{
 			case GPUWriteMethod.NativeArrayCopy:
 				array.CopyFrom(dataGen.matrices);
@@ -276,7 +331,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		copyToGPUMarker.End();
 	}
 
-	private ProfilerMarker completeCopyJobMarker = new ProfilerMarker("Completed GPU Copy Job");
+	private readonly ProfilerMarker completeCopyJobMarker = new ProfilerMarker("Completed GPU Copy Job");
 	private void CompleteGPUCopyJob()
 	{
 		completeCopyJobMarker.Begin();
@@ -285,7 +340,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		completeCopyJobMarker.End();
 	}
 
-	private ProfilerMarker endGPUWriteMarker = new ProfilerMarker("Finished writing GPU data");
+	private readonly ProfilerMarker endGPUWriteMarker = new ProfilerMarker("Finished writing GPU data");
 	private void FinishGPU_UploadJob()
 	{
 		CompleteGPUCopyJob();
@@ -305,7 +360,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 			SetMatrixBufferData();
 	}
 
-	private ProfilerMarker dispatchComputeMarker = new ProfilerMarker("Dispatch Culling Compute");
+	private readonly ProfilerMarker dispatchComputeMarker = new ProfilerMarker("Dispatch Culling Compute");
 	private void DispatchCompute()
 	{
 		GeometryUtility.CalculateFrustumPlanes(mainCam, frustumPlanes);
@@ -328,7 +383,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		dispatchComputeMarker.End();
 	}
 
-	private ProfilerMarker pushAllMatricesMarker = new ProfilerMarker("ComputeBuffer.SetData");
+	private readonly ProfilerMarker pushAllMatricesMarker = new ProfilerMarker("ComputeBuffer.SetData");
 	private void SetMatrixBufferData()
 	{
 		pushAllMatricesMarker.Begin();
@@ -341,7 +396,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		pushAllMatricesMarker.End();
 	}
 
-	private ProfilerMarker pushAllColorsMarker = new ProfilerMarker("Update Colors and Set ComputeBuffer");
+	private readonly ProfilerMarker pushAllColorsMarker = new ProfilerMarker("Update Colors and Set ComputeBuffer");
 	private void SetColorBufferData()
 	{
 		pushAllColorsMarker.Begin();

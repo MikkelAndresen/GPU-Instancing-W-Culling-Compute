@@ -226,7 +226,7 @@ Varyings LitPassVertexInstanced(Attributes input, uint instanceID : SV_InstanceI
 }
 
 // Used in Standard (Physically Based) shader
-half4 LitPassFragmentInstanced(Varyings input/*, uint instanceID : SV_InstanceID*/) : SV_Target
+half4 LitPassFragmentInstanced(Varyings input) : SV_Target
 {
     UNITY_SETUP_INSTANCE_ID(input);
     UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
