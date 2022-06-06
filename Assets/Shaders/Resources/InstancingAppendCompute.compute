@@ -1,20 +1,18 @@
 #pragma kernel CSMain
 
+struct Plane
+{
+	float3 normal;
+	float distance;
+};
+StructuredBuffer<Plane> _FrustumPlanes;
 StructuredBuffer<float3x4> Input;
 AppendStructuredBuffer<uint> Output;
 uint _Length = 0;
 float3 _CameraPos;
 float _MaxDistance = -1;
 
-struct Plane
-{
-	float3 normal;
-	float distance;
-};
-
-StructuredBuffer<Plane> _FrustumPlanes;
-
-[numthreads(256,1,1)]
+[numthreads(1024,1,1)]
 void CSMain (uint3 id : SV_DispatchThreadID)
 {
 	if(id.x + 1 >= _Length)
@@ -23,16 +21,15 @@ void CSMain (uint3 id : SV_DispatchThreadID)
 	float3x4 mat = Input[id.x];
 	float3 pos = float3(mat[0][3], mat[1][3], mat[2][3]);
 	
-	if(_MaxDistance > 0 && length(_CameraPos - pos) > _MaxDistance)
-		return;
+	//if(_MaxDistance > 0 && length(_CameraPos - pos) > _MaxDistance)
+	//	return;
 
-	//for (int i = 0; i < 6; i++)
-	//{
-	//	float d0 = dot(pos, _FrustumPlanes[i].normal) + _FrustumPlanes[i].distance;
+	for (int i = 0; i < 6; i++)
+	{
+		float d0 = dot(pos, _FrustumPlanes[i].normal) + _FrustumPlanes[i].distance;
 
-	//	if (d0 < 0)
-	//		return;
-	//}
-	Output.Append(mat);
-	//Output.Append(id.x);
+		if (d0 < 0)
+			return;
+	}
+	Output.Append(id.x);
 }
