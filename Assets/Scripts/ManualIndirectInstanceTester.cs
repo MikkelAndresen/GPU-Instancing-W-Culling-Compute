@@ -1,14 +1,12 @@
 using UnityEngine;
 using Unity.Collections;
 using Unity.Mathematics;
-using UnityEngine.Profiling;
 using UnityEngine.Rendering;
 using System;
 using Unity.Jobs;
 using Unity.Profiling;
-using System.Threading;
 using Unity.Burst;
-using System.Collections;
+using System.Runtime.InteropServices;
 
 // Sort Input matrix buffer by a priority based on how often the developer thinks they will be updated.
 // e.g if 10 objects will update often, put them in index 0 - 10.
@@ -44,9 +42,9 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	[SerializeField]
 	private float space = 1.5f;
 	[SerializeField]
-	private bool updateAllMatrices, updateSingleMatrix, updateMatrixSubset;
+	private bool updateAllMatrices;
 	[SerializeField]
-	private int jobInnerBatchCount = 1;
+	private int jobBatchDiv = 10;
 	[SerializeField]
 	private GPUWriteMethod gpuWriteMethod = GPUWriteMethod.ParallelBatchJobCopy;
 	[SerializeField]
@@ -55,38 +53,33 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	private ShadowCastingMode shadowCastingMode = ShadowCastingMode.On;
 	[SerializeField]
 	private bool receiveShadows = true;
-	[SerializeField, Tooltip("If checked will ensure gpu data is only uploaded at EndOfFrame rather than late update, this means that data from the current frame will only be visible next frame")]
-	private bool uploadGPUDataEndOfFrame = false;
+	[SerializeField, Tooltip("If checked will make sure jobs only complete at the beginning of next frame, this can improve performance but increases latency")]
+	private bool uploadDataStartOfNextFrame = false;
 	[SerializeField]
 	private int dispatchX;
 	[SerializeField]
-	private float jobDeltaTime;
-	private float jobStartTimeSeconds;
-	[SerializeField]
 	private Shader instancingShader;
 	private Shader InstancingShader => instancingShader == null ? Shader.Find("Unlit/InstancedIndirectUnlit") : instancingShader;
-
-	private ComputeBuffer InputBuffer => matrixInputBuffer.Buffer;
-	private ComputeBuffer OutputBuffer => indexOutputBuffer.Buffer;
 
 	private ComputeBufferMode MatrixBufferMode =>
 		matrixBufferMode == ComputeBufferWriteMode.Immutable ? ComputeBufferMode.Immutable : ComputeBufferMode.SubUpdates;
 	public int TotalCount => dimension * dimension * dimension;
 	public bool UseSubUpdates => matrixBufferMode == ComputeBufferWriteMode.SubUpdates;
 
-	[SerializeField]
-	private Material mat;
 	private Bounds bounds = new Bounds(Vector3.zero, Vector3.one * 10000);
 	private uint[] args;
 	private ComputeBuffer argsBuffer;
+	private Material mat;
 
 	private GenericNativeComputeBuffer<float3x4> matrixInputBuffer;
 	private GenericNativeComputeBuffer<uint> indexOutputBuffer;
+	private ComputeBuffer frustumPlaneBuffer;
+	private Plane[] frustumPlanes = new Plane[6];
 	private GenericNativeComputeBuffer<float4> colorBuffer;
 	private ComputeShader appendCompute;
 	private int appendComputeKernel = -1;
 	private int threadCount = -1;
-	private Transform camTrans;
+	private Camera mainCam;
 	private TestDataGenerator dataGen;
 	private DataSubset matrixBufferSubset = new DataSubset(0, 0);
 	private DataSubset colorBufferSubset = new DataSubset(0, 0);
@@ -100,6 +93,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	protected static int materialIndexBufferID = Shader.PropertyToID("indexBuffer");
 	protected static int colorBufferID = Shader.PropertyToID("colorBuffer");
 	protected static int maxDistanceID = Shader.PropertyToID("_MaxDistance");
+	protected static int frustumBufferID = Shader.PropertyToID("_FrustumPlanes");
 
 	void Start()
 	{
@@ -119,16 +113,16 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		appendCompute.GetKernelThreadGroupSizes(appendComputeKernel, out uint x, out _, out _);
 		threadCount = (int)x;
 		indexOutputBuffer = new GenericNativeComputeBuffer<uint>(new NativeArray<uint>(TotalCount, Allocator.Persistent), ComputeBufferType.Append);
-		//OutputBuffer.SetCounterValue(0);
 
-		camTrans = Camera.main.transform;
+		mainCam = Camera.main;
 		dataGen = new TestDataGenerator(dimension);
 
 		matrixInputBuffer = new GenericNativeComputeBuffer<float3x4>(
 			new NativeArray<float3x4>(TotalCount, Allocator.Persistent), ComputeBufferType.Default, MatrixBufferMode);
 		colorBuffer = new GenericNativeComputeBuffer<float4>(dataGen.colors);
+		frustumPlaneBuffer = new ComputeBuffer(6, Marshal.SizeOf(typeof(Plane)));
 
-		dataGen.RunMatrixJob(dimension, space, true, jobDeltaTime);
+		dataGen.RunMatrixJob(dimension, space, true, Time.deltaTime);
 		dataGen.RunColorJob(dimension, true);
 		SetMatrixBufferData();
 		SetColorBufferData();
@@ -140,45 +134,42 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		InvalidateArgumentBuffer();
 	}
 
-	// This flag is used when completing the first job which copies data to the gpu.
-	// It is used in LateUpdate for the first time because WaitForEndOfFrame doesn't seem to run the first frame,
-	// which results in multiple different vague errors either about multiple job accessing a nativearray or that the array has been deallocated.
+	// According to this source https://docs.unity3d.com/Manual/ExecutionOrder.html coroutines won't execute until the next frame.
+	// Which means if we use it in Start, we won't get a callback until the next frame and so need to force complete our jobs the first time.
 	private bool firstFrame = true;
 
 	private ProfilerMarker completeDataGenerationJobMarker = new ProfilerMarker("Complete Data generation");
 	void Update()
 	{
+		if (uploadDataStartOfNextFrame)
+		{
+			FinishGPU_UploadJob();
+			DispatchCompute();
+		}
+
 		// We isolate the data generation so we clearly see other costs
 		completeDataGenerationJobMarker.Begin();
-		dataGen.RunMatrixJob(dimension, space, completeNow: true, jobDeltaTime);
+		dataGen.RunMatrixJob(dimension, space, completeNow: true, Time.deltaTime);
 		completeDataGenerationJobMarker.End();
 
 		// Performance tests for pushing data to GPU
 		if (TotalCount > 0 && updateAllMatrices)
 			StartWriteJob();
-
-		// Sleep 10ms for simulating workload on main thread,
-		// so a job may for example run parallel to the main by completing later in the frame
-		//Thread.Sleep(10);
-
-		if (uploadGPUDataEndOfFrame && !firstFrame)
-			StartCoroutine(EndOfFrameGPU_Upload());
-	}
-
-	private YieldInstruction endOfFrame = new WaitForEndOfFrame();
-	private IEnumerator EndOfFrameGPU_Upload()
-	{
-		yield return endOfFrame;
-		FinishGPU_UploadJob();
 	}
 
 	private void LateUpdate()
 	{
-		if (!uploadGPUDataEndOfFrame || firstFrame)
+		if (!uploadDataStartOfNextFrame)
 		{
 			FinishGPU_UploadJob();
-			firstFrame = false;
+
+			// Dispatch culling compute after we've uploaded the matrices
+			DispatchCompute();
 		}
+
+		if (!UseSubUpdates)
+			SetBufferData();
+
 		Render();
 	}
 
@@ -198,9 +189,8 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 
 	private void UpdateAppendCountInArgs()
 	{
-		//Graphics.CreateAsyncGraphicsFence
 		// Copy count about 
-		ComputeBuffer.CopyCount(OutputBuffer, argsBuffer, 4);
+		ComputeBuffer.CopyCount(indexOutputBuffer.Buffer, argsBuffer, 4);
 	}
 
 	private ProfilerMarker renderMarker = new ProfilerMarker("Do Render");
@@ -234,8 +224,6 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	{
 		if (UseSubUpdates)
 		{
-			jobDeltaTime = Time.time - jobStartTimeSeconds;
-			jobStartTimeSeconds = Time.time;
 			beginGPUWriteMarker.Begin();
 			endBufferWrite = matrixInputBuffer.BeginWriteMatrices<float3x4>(0, TotalCount, CopyDataToGPU);
 			beginGPUWriteMarker.End();
@@ -259,11 +247,12 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 				array.CopyFrom(dataGen.matrices);
 				break;
 			case GPUWriteMethod.ParallelForJobSet:
+				int batchCount = TotalCount / 4;
 				currentGPUCopyJob = new ParallelCPUToGPUCopyJob<float3x4>()
 				{
 					src = dataGen.matrices,
 					dst = array
-				}.Schedule(TotalCount, Mathf.Max(1, jobInnerBatchCount));
+				}.Schedule(TotalCount, batchCount);
 				break;
 			case GPUWriteMethod.JobNativeArrayCopy:
 				currentGPUCopyJob = new CPUToGPUCopyJob<float3x4>()
@@ -274,12 +263,11 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 				break;
 			case GPUWriteMethod.ParallelBatchJobCopy:
 				int length = TotalCount;
-				int batchCount = length / 4;
-				currentGPUCopyJob = new ParallelCPUToGPUCopyJob<float3x4>()
+				currentGPUCopyJob = new BatchParallelCPUToGPUCopyJob<float3x4>()
 				{
 					src = dataGen.matrices,
 					dst = array
-				}.Schedule(length, batchCount);
+				}.ScheduleBatch(length, length / jobBatchDiv);
 				break;
 			default:
 				break;
@@ -305,35 +293,37 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		endGPUWriteMarker.Begin();
 		// Finish ComputeBuffer.BeginWrite
 		endBufferWrite?.Invoke();
+		// Set to null so there is no chance of reuse, otherwise we get an exception about the array being deallocated
+		endBufferWrite = null;
 		endGPUWriteMarker.End();
+	}
 
+	private void SetBufferData()
+	{
 		// ComputeBuffer.SetData
 		if (!UseSubUpdates)
 			SetMatrixBufferData();
-
-		// Dispatch culling compute after we've uploaded the matrices
-		DispatchCompute();
 	}
-	[SerializeField]
-	private float maxDist = 100;
-	//private GraphicsFence computeFence;
+
 	private ProfilerMarker dispatchComputeMarker = new ProfilerMarker("Dispatch Culling Compute");
 	private void DispatchCompute()
 	{
-		dispatchComputeMarker.Begin();
-		//computeFence = Graphics.CreateGraphicsFence(GraphicsFenceType.AsyncQueueSynchronisation, SynchronisationStageFlags.ComputeProcessing);
+		GeometryUtility.CalculateFrustumPlanes(mainCam, frustumPlanes);
+		frustumPlaneBuffer.SetData(frustumPlanes);
 
-		OutputBuffer.SetCounterValue(0);
+		dispatchComputeMarker.Begin();
+
+		indexOutputBuffer.Buffer.SetCounterValue(0);
 		appendCompute.SetBuffer(appendComputeKernel, computeInputID, matrixInputBuffer.Buffer); // Matrices
 		appendCompute.SetBuffer(appendComputeKernel, computeOutputID, indexOutputBuffer.Buffer); // Indices
+		appendCompute.SetBuffer(appendComputeKernel, frustumBufferID, frustumPlaneBuffer); // Frustum planes
+
 		appendCompute.SetInt(lengthID, TotalCount);
-		appendCompute.SetVector(cameraPosID, camTrans.position);
-		appendCompute.SetFloat(maxDistanceID, maxDist);
+		appendCompute.SetVector(cameraPosID, mainCam.transform.position);
+		appendCompute.SetFloat(maxDistanceID, 100f);
 
 		dispatchX = Mathf.Min((TotalCount + threadCount - 1) / threadCount, 65535);
 		appendCompute.Dispatch(appendComputeKernel, dispatchX, 1, 1);
-
-		//Graphics.WaitOnAsyncGraphicsFence(computeFence);
 
 		dispatchComputeMarker.End();
 	}
@@ -363,11 +353,16 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 
 	private void OnDestroy()
 	{
+		// We wanna finish the jobs here in case it's still running
+		// because they depend on stuff we dispose below
+		FinishGPU_UploadJob();
+
 		matrixInputBuffer.Dispose();
 		colorBuffer.Dispose();
 		argsBuffer.Release();
 		indexOutputBuffer.Dispose();
 		dataGen.Dispose();
+		frustumPlaneBuffer.Release();
 	}
 
 	#region Job types
