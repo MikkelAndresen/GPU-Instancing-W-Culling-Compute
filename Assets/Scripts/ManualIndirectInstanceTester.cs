@@ -5,8 +5,7 @@ using UnityEngine.Rendering;
 using System;
 using Unity.Jobs;
 using Unity.Profiling;
-using Unity.Burst;
-using System.Runtime.InteropServices;
+using CommonJobs;
 
 // Sort Input matrix buffer by a priority based on how often the developer thinks they will be updated.
 // e.g if 10 objects will update often, put them in index 0 - 10.
@@ -111,45 +110,18 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 
 	private GenericNativeComputeBuffer<float3x4> matrixInputBuffer;
 	private GenericNativeComputeBuffer<uint> indexOutputBuffer;
-	private ComputeBuffer frustumPlaneBuffer;
-	private Plane[] frustumPlanes = new Plane[6];
+	private NativeArray<int> parallelCounter; // Used to hold a single counter for indexing
 	private GenericNativeComputeBuffer<float4> colorBuffer;
-	private ComputeShader cullingCompute;
-	private ComputeShader CullingCompute => cullingCompute == null || cullingCompute.Equals(null) ?
-		cullingCompute = Resources.Load<ComputeShader>("MatrixFrustumCullingCompute") : cullingCompute;
 
-	private int cullingComputeKernel = int.MaxValue;
-	private int CullingComputeKernel => cullingComputeKernel == int.MaxValue ? CullingCompute.FindKernel("CSMain") : cullingComputeKernel;
-	private int threadCount = int.MaxValue;
-	public int ThreadCount
-	{
-		get
-		{
-			if (threadCount == int.MaxValue)
-			{
-				CullingCompute.GetKernelThreadGroupSizes(CullingComputeKernel, out uint x, out _, out _);
-				threadCount = (int)x;
-			}
-			return threadCount;
-		}
-	}
-
-	private Camera mainCam;
 	private TestDataGenerator dataGen;
 	private DataSubset matrixBufferSubset = new DataSubset(0, 0);
 	private DataSubset colorBufferSubset = new DataSubset(0, 0);
+	private ComputeCuller computeCuller;
 	private JobHandle currentGPUCopyJob;
-	private int DispatchX => Mathf.Min((TotalCount + ThreadCount - 1) / ThreadCount, 65535);
 
-	protected static int computeInputID = Shader.PropertyToID("Input");
-	protected static int computeOutputID = Shader.PropertyToID("Output");
-	protected static int lengthID = Shader.PropertyToID("_Length");
-	protected static int cameraPosID = Shader.PropertyToID("_CameraPos");
 	protected static int materialMatrixBufferID = Shader.PropertyToID("matrixBuffer");
 	protected static int materialIndexBufferID = Shader.PropertyToID("indexBuffer");
 	protected static int colorBufferID = Shader.PropertyToID("colorBuffer");
-	protected static int maxDistanceID = Shader.PropertyToID("_MaxDistance");
-	protected static int frustumBufferID = Shader.PropertyToID("_FrustumPlanes");
 
 	void Start()
 	{
@@ -166,13 +138,20 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 			};
 		}
 
-		indexOutputBuffer = new GenericNativeComputeBuffer<uint>(new NativeArray<uint>(TotalCount, Allocator.Persistent), ComputeBufferType.Append);
+		indexOutputBuffer = new GenericNativeComputeBuffer<uint>(
+			new NativeArray<uint>(TotalCount, Allocator.Persistent), ComputeBufferType.Append, ComputeBufferMode.Immutable);
 
-		mainCam = Camera.main;
+		parallelCounter = new NativeArray<int>(1, Allocator.Persistent);
+
 		dataGen = new TestDataGenerator(dimension);
 
+		if (Camera.main != null)
+			computeCuller = new ComputeCuller(Camera.main);
+		else
+			Debug.LogError($"{nameof(ManualIndirectInstanceTester)} failed to create compute culler because there is no main camera");
+
 		colorBuffer = new GenericNativeComputeBuffer<float4>(dataGen.colors);
-		frustumPlaneBuffer = new ComputeBuffer(6, Marshal.SizeOf(typeof(Plane)));
+
 		InvalidateMatrixBuffer();
 
 		// Set all inital data
@@ -208,13 +187,10 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		// can't cause issues with arrays used in this job and the testData generate job.
 		CompleteGPUCopyJob();
 
+		ResetIndexBufferCounter();
+
 		if (uploadDataStartOfNextFrame)
-		{
-			FinishGPU_UploadJob();
-			DispatchCompute();
-			if (!UseSubUpdates)
-				SetBufferData();
-		}
+			UploadGPUDataAndDispatchCompute();
 
 		// We isolate the data generation so we clearly see other costs
 		completeDataGenerationJobMarker.Begin();
@@ -229,14 +205,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	private void LateUpdate()
 	{
 		if (!uploadDataStartOfNextFrame)
-		{
-			FinishGPU_UploadJob();
-
-			// Dispatch culling compute after we've uploaded the matrices
-			DispatchCompute();
-			if (!UseSubUpdates)
-				SetBufferData();
-		}
+			UploadGPUDataAndDispatchCompute();
 
 		Render();
 	}
@@ -255,9 +224,10 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		argsBuffer.SetData(args);
 	}
 
+	private void ResetIndexBufferCounter() => indexOutputBuffer.Buffer.SetCounterValue(0);
+
 	private void UpdateAppendCountInArgs()
 	{
-		// Copy count about 
 		ComputeBuffer.CopyCount(indexOutputBuffer.Buffer, argsBuffer, 4);
 	}
 
@@ -265,8 +235,6 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 	public void Render()
 	{
 		renderMarker.Begin();
-
-		UpdateAppendCountInArgs();
 
 		Graphics.DrawMeshInstancedIndirect(
 				mesh,
@@ -303,6 +271,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 			CopyDataToGPU(ref array);
 		}
 	}
+	private NativeArray<Plane> nativeFrustumPlanes;
 
 	private readonly ProfilerMarker copyToGPUMarker = new ProfilerMarker("Copy data to GPU");
 	private void CopyDataToGPU(ref NativeArray<float3x4> array)
@@ -366,33 +335,23 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		endGPUWriteMarker.End();
 	}
 
-	private void SetBufferData()
+	private void UploadGPUDataAndDispatchCompute()
 	{
-		// ComputeBuffer.SetData
+		FinishGPU_UploadJob();
+
+		// Dispatch culling compute after we've uploaded the matrices
+		computeCuller.DispatchCompute(matrixInputBuffer.Buffer, indexOutputBuffer.Buffer);
 		if (!UseSubUpdates)
-			SetMatrixBufferData();
+			SetBufferData();
+
+		UpdateAppendCountInArgs();
 	}
 
-	private readonly ProfilerMarker dispatchComputeMarker = new ProfilerMarker("Dispatch Culling Compute");
-	private void DispatchCompute()
+	private void SetBufferData()
 	{
-		GeometryUtility.CalculateFrustumPlanes(mainCam, frustumPlanes);
-		frustumPlaneBuffer.SetData(frustumPlanes);
-
-		dispatchComputeMarker.Begin();
-
-		indexOutputBuffer.Buffer.SetCounterValue(0);
-		CullingCompute.SetBuffer(CullingComputeKernel, computeInputID, matrixInputBuffer.Buffer); // Matrices
-		CullingCompute.SetBuffer(CullingComputeKernel, computeOutputID, indexOutputBuffer.Buffer); // Indices
-		CullingCompute.SetBuffer(CullingComputeKernel, frustumBufferID, frustumPlaneBuffer); // Frustum planes
-
-		CullingCompute.SetInt(lengthID, TotalCount);
-		CullingCompute.SetVector(cameraPosID, mainCam.transform.position);
-		CullingCompute.SetFloat(maxDistanceID, 100f);
-
-		CullingCompute.Dispatch(CullingComputeKernel, DispatchX, 1, 1);
-
-		dispatchComputeMarker.End();
+		// ComputeBuffer SetData
+		if (!UseSubUpdates)
+			SetMatrixBufferData();
 	}
 
 	private readonly ProfilerMarker pushAllMatricesMarker = new ProfilerMarker("ComputeBuffer.SetData");
@@ -429,58 +388,7 @@ public class ManualIndirectInstanceTester : MonoBehaviour
 		argsBuffer.Release();
 		indexOutputBuffer.Dispose();
 		dataGen.Dispose();
-		frustumPlaneBuffer.Release();
+		parallelCounter.Dispose();
+		computeCuller.Dispose();
 	}
-
-	#region Job types
-
-	[BurstCompile(FloatPrecision = FloatPrecision.Low, FloatMode = FloatMode.Fast)]
-	public struct CPUToGPUCopyJob<T> : IJob where T : unmanaged
-	{
-		[ReadOnly] public NativeArray<T> src;
-		[WriteOnly] public NativeArray<T> dst;
-
-		public void Execute()
-		{
-			dst.CopyFrom(src);
-		}
-	}
-
-	[BurstCompile(FloatPrecision = FloatPrecision.Low, FloatMode = FloatMode.Fast)]
-	public struct ParallelCPUToGPUCopyJob<T> : IJobParallelFor where T : unmanaged
-	{
-		[ReadOnly] public NativeArray<T> src;
-		[WriteOnly] public NativeArray<T> dst;
-
-		public void Execute(int index)
-		{
-			dst[index] = src[index];
-		}
-	}
-
-	[BurstCompile(FloatPrecision = FloatPrecision.Low, FloatMode = FloatMode.Fast)]
-	public struct BatchParallelCPUToGPUCopyJob<T> : IJobParallelForBatch where T : unmanaged
-	{
-		[ReadOnly] public NativeArray<T> src;
-		[WriteOnly] public NativeArray<T> dst;
-
-		public void Execute(int startIndex, int count)
-		{
-			NativeArray<T>.Copy(src, startIndex, dst, startIndex, count);
-		}
-	}
-
-	[BurstCompile(FloatPrecision = FloatPrecision.Low, FloatMode = FloatMode.Fast)]
-	public struct CPUToGPUCopyForJob<T> : IJobFor where T : unmanaged
-	{
-		[ReadOnly] public NativeArray<T> src;
-		[WriteOnly] public NativeArray<T> dst;
-
-		public void Execute(int index)
-		{
-			dst[index] = src[index];
-		}
-	}
-
-	#endregion
 }
