@@ -52,8 +52,8 @@ public class DrawInstancedJobsCulled : MonoBehaviour
 	private Material mat;
 
 	private GenericNativeComputeBuffer<float3x4> matrixInputBuffer;
-	private GenericNativeComputeBuffer<uint> indexOutputBuffer;
-	private NativeReference<int> parallelCounter; // Used to hold a single counter for indexing
+	private NativeList<int> matrixIndices;
+	private ComputeBuffer indexBuffer;
 	private GenericNativeComputeBuffer<float4> colorBuffer;
 
 	private TestDataGenerator dataGen;
@@ -87,14 +87,10 @@ public class DrawInstancedJobsCulled : MonoBehaviour
 			};
 		}
 
-		indexOutputBuffer = new GenericNativeComputeBuffer<uint>(
-			new NativeArray<uint>(TotalCount, Allocator.Persistent),
-			ComputeBufferType.Default,
-			useSubUpdatesForIndexBuffer ? ComputeBufferMode.SubUpdates : ComputeBufferMode.Immutable);
-
 		dataGen = new TestDataGenerator(dimension, transform);
 		nativeFrustumPlanes = new NativeArray<Plane>(6, Allocator.Persistent);
-		parallelCounter = new NativeReference<int>(1, Allocator.Persistent);
+		matrixIndices = new NativeList<int>(TotalCount, Allocator.Persistent);
+		indexBuffer = new ComputeBuffer(TotalCount, sizeof(int));
 		colorBuffer = new GenericNativeComputeBuffer<float4>(dataGen.colors);
 
 		InvalidateMatrixBuffer();
@@ -105,7 +101,7 @@ public class DrawInstancedJobsCulled : MonoBehaviour
 		SetMatrixBufferData();
 		SetColorBufferData();
 
-		mat.SetBuffer(materialIndexBufferID, indexOutputBuffer.Buffer);
+		mat.SetBuffer(materialIndexBufferID, indexBuffer);
 		mat.SetBuffer(colorBufferID, colorBuffer.Buffer);
 
 		RenderPipelineManager.beginFrameRendering += RenderPipelineManager_beginFrameRendering;
@@ -147,7 +143,7 @@ public class DrawInstancedJobsCulled : MonoBehaviour
 		}
 	}
 
-	private void ResetIndexBufferCounter() => indexOutputBuffer.Buffer.SetCounterValue(0);
+	private void ResetIndexBufferCounter() => indexBuffer.SetCounterValue(0);
 
 	private readonly ProfilerMarker renderMarker = new ProfilerMarker("Render");
 
@@ -188,15 +184,9 @@ public class DrawInstancedJobsCulled : MonoBehaviour
 		renderMarker.End();
 	}
 
-	private void RenderPipelineManager_beginFrameRendering(ScriptableRenderContext arg1, Camera[] arg2)
-	{
-		FinishGPU_UploadJob();
-	}
+	private void RenderPipelineManager_beginFrameRendering(ScriptableRenderContext arg1, Camera[] arg2) => FinishGPU_UploadJob();
 
-	private void RenderPipelineManager_beginCameraRendering(ScriptableRenderContext arg1, Camera cam)
-	{
-		Render(cam);
-	}
+	private void RenderPipelineManager_beginCameraRendering(ScriptableRenderContext arg1, Camera cam) => Render(cam);
 
 	private readonly ProfilerMarker beginGPUWriteMarker = new ProfilerMarker("BeginGPU Write");
 	private Action endMatrixBufferWrite, endIndexBufferWrite;
@@ -205,7 +195,7 @@ public class DrawInstancedJobsCulled : MonoBehaviour
 		CurrentRenderCount = 0;
 
 		beginGPUWriteMarker.Begin();
-		if (matrixInputBuffer.BufferBeingWritten || indexOutputBuffer.BufferBeingWritten)
+		if (matrixInputBuffer.BufferBeingWritten)
 		{
 			beginGPUWriteMarker.End();
 			return;
@@ -216,38 +206,28 @@ public class DrawInstancedJobsCulled : MonoBehaviour
 		var (endMatrixWrite, matrices) = matrixInputBuffer.BeginWriteMatrices(0, TotalCount);
 		endMatrixBufferWrite = endMatrixWrite;
 
-		NativeArray<uint> indices;
-		if (useSubUpdatesForIndexBuffer)
-		{
-			var (endWrite, data) = indexOutputBuffer.BeginWriteMatrices(0, TotalCount);
-			endIndexBufferWrite = endWrite;
-			indices = data;
-		}
-		else
-			indices = indexOutputBuffer.Data;
-
-		CullAndCopyDataToGPU(matrices, indices);
+		CullAndCopyDataToGPU(matrices);
 
 		beginGPUWriteMarker.End();
 	}
 
-	private CPUToGPUCopyAndCullJob cullJob;
+	[SerializeField]
+	private int innerBatchCount = 10;
+	private CPUToGPUCopyAndCullFilterJob cullJob;
 	private readonly ProfilerMarker copyToGPUMarker = new ProfilerMarker("Copy data to GPU");
-	private void CullAndCopyDataToGPU(NativeArray<float3x4> matrices, NativeArray<uint> indices)
+	private void CullAndCopyDataToGPU(NativeArray<float3x4> matrices)
 	{
 		copyToGPUMarker.Begin();
 
 		// Reset counter
-		parallelCounter.Value = 0;
-		cullJob = new CPUToGPUCopyAndCullJob()
+		matrixIndices.Clear();
+		cullJob = new CPUToGPUCopyAndCullFilterJob()
 		{
 			srcMatrices = dataGen.matrices,
 			dstMatrices = matrices,
-			indices = indices,
 			frustum = this.nativeFrustumPlanes,
-			counter = parallelCounter,
 		};
-		cullJobHandle = cullJob.Schedule(TotalCount, default);
+		cullJobHandle = cullJob.ScheduleAppend(matrixIndices, TotalCount, innerBatchCount);
 
 		copyToGPUMarker.End();
 	}
@@ -259,8 +239,8 @@ public class DrawInstancedJobsCulled : MonoBehaviour
 
 		// Finish gpu copy job
 		cullJobHandle.Complete();
-		if (parallelCounter.IsCreated)
-			CurrentRenderCount = parallelCounter.Value;
+		if (matrixIndices.IsCreated)
+			CurrentRenderCount = matrixIndices.Length;
 
 		completeCopyJobMarker.End();
 	}
@@ -305,8 +285,7 @@ public class DrawInstancedJobsCulled : MonoBehaviour
 		if (indexBufferSubset.count != CurrentRenderCount)
 			indexBufferSubset = new DataSubset(0, CurrentRenderCount);
 
-		if (indexOutputBuffer.SetData(indexBufferSubset))
-			mat.SetBuffer(materialIndexBufferID, indexOutputBuffer.Buffer);
+		indexBuffer.SetData(matrixIndices.AsArray(), 0, 0, matrixIndices.Length);
 
 		pushAllIndicesMarker.End();
 	}
@@ -345,9 +324,9 @@ public class DrawInstancedJobsCulled : MonoBehaviour
 
 		matrixInputBuffer.Dispose();
 		colorBuffer.Dispose();
-		indexOutputBuffer.Dispose();
+		indexBuffer.Dispose();
 		dataGen.Dispose();
-		parallelCounter.Dispose();
+		matrixIndices.Dispose();
 		nativeFrustumPlanes.Dispose();
 		RenderPipelineManager.beginFrameRendering -= RenderPipelineManager_beginFrameRendering;
 		RenderPipelineManager.beginCameraRendering -= RenderPipelineManager_beginCameraRendering;

@@ -55,6 +55,25 @@ namespace CommonJobs
 	}
 
 	[BurstCompile(FloatPrecision = FloatPrecision.Low, FloatMode = FloatMode.Fast)]
+	public struct CPUToGPUCopyAndCullFilterJob : IJobParallelForFilter
+	{
+		[ReadOnly] public NativeArray<float3x4> srcMatrices;
+		[WriteOnly] public NativeArray<float3x4> dstMatrices;
+		[ReadOnly]
+		public NativeArray<Plane> frustum;
+
+		public bool Execute(int index)
+		{
+			bool valid = MathUtil.IsPointInFrustum(frustum, srcMatrices[index].c3);
+
+			// Assign the matrix value to the GPU data
+			if (valid)
+				dstMatrices[index] = srcMatrices[index];
+			return valid;
+		}
+	}
+
+	[BurstCompile(FloatPrecision = FloatPrecision.Low, FloatMode = FloatMode.Fast)]
 	public struct CPUToGPUCopyJob<T> : IJob where T : unmanaged
 	{
 		[ReadOnly] public NativeArray<T> src;
