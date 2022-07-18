@@ -7,7 +7,6 @@ using Unity.Jobs;
 using Unity.Profiling;
 using CommonJobs;
 using Plane = MathUtil.Plane;
-using System.Threading;
 
 // Sort Input matrix buffer by a priority based on how often the developer thinks they will be updated.
 // e.g if 10 objects will update often, put them in index 0 - 10.
@@ -30,8 +29,6 @@ public class DrawInstancedJobsCulled : MonoBehaviour
 	//private int renderFrameCounter;
 	[SerializeField]
 	private float space = 1.5f;
-	[SerializeField]
-	private bool useSubUpdatesForIndexBuffer = true;
 
 	[SerializeField]
 	private ShadowCastingMode shadowCastingMode = ShadowCastingMode.On;
@@ -225,7 +222,7 @@ public class DrawInstancedJobsCulled : MonoBehaviour
 		{
 			srcMatrices = dataGen.matrices,
 			dstMatrices = matrices,
-			frustum = this.nativeFrustumPlanes,
+			frustum = nativeFrustumPlanes,
 		};
 		cullJobHandle = cullJob.ScheduleAppend(matrixIndices, TotalCount, innerBatchCount);
 
