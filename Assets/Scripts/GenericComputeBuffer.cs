@@ -2,10 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Unity.Collections;
-using Unity.Mathematics;
 using Unity.Profiling;
 using UnityEngine;
-using UnityEngine.Profiling;
 
 public class DataSubset
 {
@@ -24,6 +22,8 @@ public abstract class AbstractComputeBuffer : IDisposable
 	public delegate void BufferWriteDelegate<T>(ref NativeArray<T> matrices) where T : unmanaged;
 
 	protected ComputeBuffer buffer;
+	private bool isWriting = false;
+	public bool BufferBeingWritten => isWriting;
 
 	public abstract int Stride { get; }
 	public abstract int Count { get; }
@@ -81,9 +81,10 @@ public abstract class AbstractComputeBuffer : IDisposable
 		return reallocated;
 	}
 
-	private ProfilerMarker beginWriteMatricesMarker = new ProfilerMarker(nameof(BeginWriteMatrices));
+	private readonly ProfilerMarker beginWriteMatricesMarker = new ProfilerMarker(nameof(BeginWriteMatrices));
 	/// <summary>
-	/// Uses <see cref="ComputeBuffer.BeginWrite{T}(int, int)"/>
+	/// Uses <see cref="ComputeBuffer.BeginWrite{T}(int, int)"/>.
+	/// Returns default if either <see cref="BufferMode"/> isn't <see cref="ComputeBufferMode.SubUpdates"/> or if <see cref="isWriting"/>.
 	/// </summary>
 	/// <typeparam name="T"></typeparam>
 	/// <param name="startIndex"></param>
@@ -95,19 +96,64 @@ public abstract class AbstractComputeBuffer : IDisposable
 		if (writeCount > Count || writeCount <= 0)
 			throw new ArgumentOutOfRangeException($"{nameof(writeCount)} cannot <= 0 or > than {Count}");
 
+		if (BufferMode != ComputeBufferMode.SubUpdates)
+			return default;
+
+		if (isWriting)
+			return default;
+
 		beginWriteMatricesMarker.Begin();
 
 		EnsureBufferSize();
-		var array = Buffer.BeginWrite<T>(startIndex, writeCount);
+		NativeArray<T> array = Buffer.BeginWrite<T>(startIndex, writeCount);
 
 		del(ref array);
 
 		beginWriteMatricesMarker.End();
+
+		isWriting = true;
 		return () =>
 		{
-			if(array.IsCreated) // Some errors have occured in the past where the array was disposed before this action was called
+			isWriting = false;
+			if (array.IsCreated) // Some errors have occured in the past where the array was disposed before this action was called
 				Buffer.EndWrite<T>(writeCount);
 		};
+	}
+
+	/// <summary>
+	/// Uses <see cref="ComputeBuffer.BeginWrite{T}(int, int)"/>.
+	/// Returns default if either <see cref="BufferMode"/> isn't <see cref="ComputeBufferMode.SubUpdates"/> or if <see cref="isWriting"/>.
+	/// </summary>
+	/// <typeparam name="T"></typeparam>
+	/// <param name="startIndex"></param>
+	/// <param name="writeCount"></param>
+	/// <param name="del"></param>
+	/// <returns>An action which runs <see cref="ComputeBuffer.EndWrite{T}(int)"/></returns>
+	public (Action endWrite, NativeArray<T> data) BeginWriteMatrices<T>(int startIndex, int writeCount) where T : unmanaged
+	{
+		if (writeCount > Count || writeCount <= 0)
+			throw new ArgumentOutOfRangeException($"{nameof(writeCount)} cannot <= 0 or > than {Count}");
+
+		if (BufferMode != ComputeBufferMode.SubUpdates)
+			return default;
+
+		if (isWriting)
+			return default;
+
+		beginWriteMatricesMarker.Begin();
+
+		EnsureBufferSize();
+		NativeArray<T> array = Buffer.BeginWrite<T>(startIndex, writeCount);
+
+		beginWriteMatricesMarker.End();
+
+		isWriting = true;
+		return (() =>
+		{
+			isWriting = false;
+			if (array.IsCreated) // Some errors have occured in the past where the array was disposed before this action was called
+				Buffer.EndWrite<T>(writeCount);
+		}, array);
 	}
 
 	protected abstract void SetBufferData(DataSubset subset);
@@ -180,7 +226,7 @@ public class GenericComputeBuffer<T> : AbstractComputeBuffer where T : struct
 	}
 }
 
-public class GenericNativeComputeBuffer<T> : AbstractComputeBuffer where T : struct
+public class GenericNativeComputeBuffer<T> : AbstractComputeBuffer where T : unmanaged
 {
 	private NativeArray<T> data;
 	public NativeArray<T> Data => data;
@@ -220,6 +266,10 @@ public class GenericNativeComputeBuffer<T> : AbstractComputeBuffer where T : str
 		else
 			buffer.SetData(data);
 	}
+
+	public Action BeginWriteMatrices(int startIndex, int writeCount, BufferWriteDelegate<T> del) => base.BeginWriteMatrices<T>(startIndex, writeCount, del);
+	public (Action endWrite, NativeArray<T> data) BeginWriteMatrices(int startIndex, int writeCount) => base.BeginWriteMatrices<T>(startIndex, writeCount);
+
 
 	protected override void OnDispose()
 	{
