@@ -31,6 +31,10 @@ public struct GenerateColorsJob : IJobParallelFor
 [BurstCompile(FloatPrecision = FloatPrecision.Low, FloatMode = FloatMode.Fast)]
 public struct GenerateMatricesJob : IJobParallelFor
 {
+	[ReadOnly]
+	private float3 pos;
+	[ReadOnly]
+	private quaternion rot;
 	[WriteOnly]
 	private NativeArray<float3x4> matrices;
 	[ReadOnly]
@@ -42,6 +46,8 @@ public struct GenerateMatricesJob : IJobParallelFor
 
 	public GenerateMatricesJob(
 		NativeArray<float3x4> matrices,
+		float3 pos,
+		quaternion rot,
 		float space,
 		int dimension,
 		float theta)
@@ -50,16 +56,28 @@ public struct GenerateMatricesJob : IJobParallelFor
 		this.space = space;
 		this.dimension = dimension;
 		this.theta = theta;
+		this.pos = pos;
+		this.rot = rot;
 	}
 
-	public void Execute(int i) => UpdateMatrix(ref matrices, i, dimension, space, theta);
+	public void Execute(int i) => UpdateMatrix(ref matrices, pos, rot, i, dimension, space, theta);
 
-	public static void UpdateMatrix(ref NativeArray<float3x4> matrices, int i, int dimension, float space, float theta)
+	public static void UpdateMatrix(ref NativeArray<float3x4> matrices, float3 pos, quaternion rot, int i, int dimension, float space, float theta)
 	{
 		int3 index3D = MathUtil.Get3DIndex(i, dimension, dimension);
-		matrices[i] = TestDataGenerator.GetTransformMatrixNoScale(
+		var mat3x4 = TestDataGenerator.GetTransformMatrixNoScale(
 			new float3(index3D.x, index3D.y, index3D.z) * space,
 			quaternion.EulerXYZ(theta, -theta, theta));
+
+		var mat4x4 = new float4x4(new float4(mat3x4.c0, 0), new float4(mat3x4.c1, 0), new float4(mat3x4.c2, 0), new float4(mat3x4.c3, 1));
+		float4x4 parentMat4 = new float4x4(rot, pos);
+		mat4x4 = math.mul(parentMat4, mat4x4);
+
+		matrices[i] = new float3x4(mat4x4.c0.xyz, mat4x4.c1.xyz, mat4x4.c2.xyz, mat4x4.c3.xyz);
+
+		//matrices[i] = TestDataGenerator.GetTransformMatrixNoScale(
+		//	pos + (new float3(index3D.x, index3D.y, index3D.z) * space),
+		//	math.mul(rot, quaternion.EulerXYZ(theta, -theta, theta)));
 		//matrices[i] = TestDataGenerator.GetTransformMatrixNoScale(new float3(2, 2, 2), quaternion.identity);
 	}
 }
@@ -75,6 +93,7 @@ public class TestDataGenerator : IDisposable
 	private Random random;
 	private JobHandle currentMatrixJob;
 	private Stack<(JobHandle, Action)> callbackStack = new Stack<(JobHandle, Action)>();
+	private Transform parent;
 
 	private float theta;
 	public float Theta
@@ -83,13 +102,14 @@ public class TestDataGenerator : IDisposable
 		set => theta = math.min(value, 360);
 	}
 
-	public TestDataGenerator(int dimension)
+	public TestDataGenerator(int dimension, Transform parent = null)
 	{
 		this.dimension = dimension;
 		random = new Random();
 		random.InitState();
 		EnsureArraySize(ref matrices, Count);
 		EnsureArraySize(ref colors, Count);
+		this.parent = parent;
 	}
 
 	private JobHandle currentColorJob;
@@ -134,7 +154,9 @@ public class TestDataGenerator : IDisposable
 		deltaTime = completeNow ? Time.deltaTime : deltaTime;
 		Theta += deltaTime * anglePerSecond;
 
-		GenerateMatricesJob job = new GenerateMatricesJob(matrices, space, dimension, theta);
+		quaternion parentRot = parent != null ? (quaternion)parent.rotation : quaternion.identity;
+		float3 parentPos = parent != null ? (float3)parent.position : float3.zero;
+		GenerateMatricesJob job = new GenerateMatricesJob(matrices, parentPos, parentRot, space, dimension, theta);
 
 		try // We trycatch here because other jobs might be using the array
 		{
