@@ -2,6 +2,7 @@ using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
+using static MathUtil;
 using Plane = MathUtil.Plane;
 
 namespace CommonJobs
@@ -57,6 +58,7 @@ namespace CommonJobs
 	[BurstCompile(FloatPrecision = FloatPrecision.Low, FloatMode = FloatMode.Fast)]
 	public struct CPUToGPUCopyAndCullFilterJob : IJobParallelForFilter
 	{
+		[ReadOnly] public float3 boundSize;
 		[ReadOnly] public NativeArray<float3x4> srcMatrices;
 		[WriteOnly] public NativeArray<float3x4> dstMatrices;
 		[ReadOnly]
@@ -64,7 +66,7 @@ namespace CommonJobs
 
 		public bool Execute(int index)
 		{
-			bool valid = MathUtil.IsPointInFrustum(frustum, srcMatrices[index].c3);
+			bool valid = MathUtil.IsBoundsInFrustum(frustum, new AABB(srcMatrices[index].c3, boundSize));
 
 			// Assign the matrix value to the GPU data
 			if (valid)

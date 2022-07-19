@@ -92,8 +92,8 @@ public class TestDataGenerator : IDisposable
 
 	private Random random;
 	private JobHandle currentMatrixJob;
-	private Stack<(JobHandle, Action)> callbackStack = new Stack<(JobHandle, Action)>();
-	private Transform parent;
+	private readonly Stack<(JobHandle, Action)> callbackStack = new Stack<(JobHandle, Action)>();
+	private readonly Transform parent;
 
 	private float theta;
 	public float Theta
@@ -146,7 +146,7 @@ public class TestDataGenerator : IDisposable
 		return RunMatrixJob(ref matrices, space, completeNow, deltaTime);
 	}
 
-	private ProfilerMarker runMatrixJobMarker = new ProfilerMarker(nameof(RunMatrixJob));
+	private readonly ProfilerMarker runMatrixJobMarker = new ProfilerMarker(nameof(RunMatrixJob));
 	public JobHandle RunMatrixJob(ref NativeArray<float3x4> matrices, float space, bool completeNow, float deltaTime = -1)
 	{
 		runMatrixJobMarker.Begin();

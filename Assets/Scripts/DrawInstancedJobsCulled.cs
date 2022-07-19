@@ -52,6 +52,7 @@ public class DrawInstancedJobsCulled : MonoBehaviour
 	private NativeList<int> matrixIndices;
 	private ComputeBuffer indexBuffer;
 	private GenericNativeComputeBuffer<float4> colorBuffer;
+	private float3 boundSize = new float3(1, 1, 1);
 
 	private TestDataGenerator dataGen;
 	private DataSubset matrixBufferSubset = new DataSubset(0, 0);
@@ -89,6 +90,7 @@ public class DrawInstancedJobsCulled : MonoBehaviour
 		matrixIndices = new NativeList<int>(TotalCount, Allocator.Persistent);
 		indexBuffer = new ComputeBuffer(TotalCount, sizeof(int));
 		colorBuffer = new GenericNativeComputeBuffer<float4>(dataGen.colors);
+		boundSize = mesh.bounds.size;
 
 		InvalidateMatrixBuffer();
 
@@ -223,6 +225,8 @@ public class DrawInstancedJobsCulled : MonoBehaviour
 			srcMatrices = dataGen.matrices,
 			dstMatrices = matrices,
 			frustum = nativeFrustumPlanes,
+			boundSize = boundSize
+			
 		};
 		cullJobHandle = cullJob.ScheduleAppend(matrixIndices, TotalCount, innerBatchCount);
 
