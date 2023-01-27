@@ -58,15 +58,15 @@ namespace CommonJobs
 	[BurstCompile(FloatPrecision = FloatPrecision.Low, FloatMode = FloatMode.Fast)]
 	public struct CPUToGPUCopyAndCullFilterJob : IJobParallelForFilter
 	{
-		[ReadOnly] public float3 boundSize;
 		[ReadOnly] public NativeArray<float3x4> srcMatrices;
+		[ReadOnly] public NativeArray<AABB> bounds;
 		[WriteOnly] public NativeArray<float3x4> dstMatrices;
 		[ReadOnly]
 		public NativeArray<Plane> frustum;
 
 		public bool Execute(int index)
 		{
-			bool valid = MathUtil.IsBoundsInFrustum(frustum, new AABB(srcMatrices[index].c3, boundSize));
+			bool valid = bounds[index].IsBoundsInFrustum(frustum);
 
 			// Assign the matrix value to the GPU data
 			if (valid)
