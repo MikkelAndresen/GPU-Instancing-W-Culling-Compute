@@ -210,10 +210,10 @@ public static class MathUtil
 	{
 		public float3 normal;
 		public float distance;
-		public Plane(UnityEngine.Plane uP)
+		public Plane(UnityEngine.Plane up)
 		{
-			this.normal = uP.normal;
-			this.distance = uP.distance;
+			this.normal = up.normal;
+			this.distance = up.distance;
 		}
 		public Plane(float3 normal, float distance)
 		{
