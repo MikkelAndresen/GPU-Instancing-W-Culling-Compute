@@ -31,12 +31,29 @@ namespace CommonJobs
 	[BurstCompile(FloatPrecision = FloatPrecision.Low, FloatMode = FloatMode.Fast)]
 	public struct CPUToGPUCopyAndCullJob : IJobFor
 	{
-		[ReadOnly] public NativeArray<float3x4> srcMatrices;
-		[WriteOnly] public NativeArray<float3x4> dstMatrices;
 		[ReadOnly]
 		public NativeArray<Plane> frustum;
-		[WriteOnly] public NativeArray<uint> indices;
-		public NativeReference<int> counter;
+		[ReadOnly]
+		public NativeSlice<AABB> bounds;
+		[ReadOnly]
+		public NativeSlice<float3x4> srcMatrices;
+		[WriteOnly]
+		public NativeSlice<float3x4> dstMatrices;
+		public NativeList<int>.ParallelWriter indices; // Need to be initialized to same capacity as input matrix array
+
+		public CPUToGPUCopyAndCullJob(
+			NativeList<int>.ParallelWriter indices,
+			NativeSlice<AABB> bounds,
+			NativeSlice<float3x4> srcMatrices,
+			NativeSlice<float3x4> dstMatrices,
+			NativeArray<Plane> frustum)
+		{
+			this.frustum = frustum;
+			this.bounds = bounds;
+			this.srcMatrices = srcMatrices;
+			this.dstMatrices = dstMatrices;
+			this.indices = indices;
+		}
 
 		public void Execute(int indexOfMatrix)
 		{
@@ -48,10 +65,7 @@ namespace CommonJobs
 			dstMatrices[indexOfMatrix] = srcMatrices[indexOfMatrix];
 
 			// Assign the matrix index to the index array for the shader to read
-			indices[counter.Value] = (uint)indexOfMatrix;
-
-			// Increment index counter, we use this because we need to keep track of how many matrices we wanna render
-			counter.Value++;
+			indices.AddNoResize(indexOfMatrix);
 		}
 	}
 
