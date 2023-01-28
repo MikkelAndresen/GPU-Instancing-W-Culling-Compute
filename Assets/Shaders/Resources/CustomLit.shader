@@ -323,8 +323,8 @@ Shader "Universal Render Pipeline/CustomLit"
             ENDHLSL
         }
 
-        // This pass it not used during regular rendering, only for lightmap baking.
-        Pass //Meta
+       // This pass it not used during regular rendering, only for lightmap baking.
+        Pass
         {
             Name "Meta"
             Tags{"LightMode" = "Meta"}
@@ -332,12 +332,13 @@ Shader "Universal Render Pipeline/CustomLit"
             Cull Off
 
             HLSLPROGRAM
-            #pragma exclude_renderers gles gles3 glcore
-            #pragma target 4.5
+            #pragma only_renderers gles gles3 glcore d3d11
+            #pragma target 2.0
 
             #pragma vertex UniversalVertexMeta
-            #pragma fragment UniversalFragmentMeta
+            #pragma fragment UniversalFragmentMetaLit
 
+            #pragma shader_feature EDITOR_VISUALIZATION
             #pragma shader_feature_local_fragment _SPECULAR_SETUP
             #pragma shader_feature_local_fragment _EMISSION
             #pragma shader_feature_local_fragment _METALLICSPECGLOSSMAP
