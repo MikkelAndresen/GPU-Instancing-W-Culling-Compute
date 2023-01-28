@@ -96,4 +96,6 @@ public static class MathUtil
 			this.distance = distance;
 		}
 	}
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public static float4 Dot4(float4 x, float4 y, float4 z, float3 rhs) => x * rhs.x + y * rhs.y + z * rhs.z;
 }
