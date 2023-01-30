@@ -223,4 +223,22 @@ public static class MathUtil
 	}
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	public static float4 Dot4(float4 x, float4 y, float4 z, float3 rhs) => x * rhs.x + y * rhs.y + z * rhs.z;
+
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public unsafe static int GetSetBitIndices(ulong n, int* indices)
+	{
+		int i = 0;
+		int t = 0;
+		while (n != 0)
+		{
+			int tcnt = math.tzcnt(n);
+			t += tcnt;
+			indices[i] = t + i;
+			//Debug.Log($"Found bit index: {t + i}");
+			i++;
+
+			n >>= tcnt + 1;
+		}
+		return i;
+	}
 }
