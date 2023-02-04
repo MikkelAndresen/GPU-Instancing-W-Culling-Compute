@@ -225,7 +225,6 @@ public class DrawInstancedJobsCulled : MonoBehaviour
 			srcMatrices = dataGen.matrices,
 			dstMatrices = matrices,
 			frustum = nativeFrustumPlanes,
-			boundSize = boundSize
 			
 		};
 		cullJobHandle = cullJob.ScheduleAppend(matrixIndices, TotalCount, innerBatchCount);
