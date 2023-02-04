@@ -10,6 +10,7 @@ using Unity.Burst;
 using System.Runtime.CompilerServices;
 using System.Collections.Generic;
 using Unity.Profiling;
+using static MathUtil;
 
 [BurstCompile(FloatPrecision = FloatPrecision.Low, FloatMode = FloatMode.Fast)]
 public struct GenerateColorsJob : IJobParallelFor
@@ -29,7 +30,7 @@ public struct GenerateColorsJob : IJobParallelFor
 }
 
 [BurstCompile(FloatPrecision = FloatPrecision.Low, FloatMode = FloatMode.Fast)]
-public struct GenerateMatricesJob : IJobParallelFor
+public struct GenerateMatricesAndBoundsJob : IJobParallelFor
 {
 	[ReadOnly]
 	private float3 pos;
@@ -37,6 +38,10 @@ public struct GenerateMatricesJob : IJobParallelFor
 	private quaternion rot;
 	[WriteOnly]
 	private NativeArray<float3x4> matrices;
+	[WriteOnly]
+	private NativeArray<AABB> bounds;
+	[ReadOnly]
+	private float3 boundSize;
 	[ReadOnly]
 	private float space;
 	[ReadOnly]
@@ -44,8 +49,10 @@ public struct GenerateMatricesJob : IJobParallelFor
 	[ReadOnly]
 	private float theta;
 
-	public GenerateMatricesJob(
+	public GenerateMatricesAndBoundsJob(
 		NativeArray<float3x4> matrices,
+		NativeArray<AABB> bounds,
+		float3 boundSize,
 		float3 pos,
 		quaternion rot,
 		float space,
@@ -53,6 +60,8 @@ public struct GenerateMatricesJob : IJobParallelFor
 		float theta)
 	{
 		this.matrices = matrices;
+		this.bounds = bounds;
+		this.boundSize = boundSize;
 		this.space = space;
 		this.dimension = dimension;
 		this.theta = theta;
@@ -60,9 +69,9 @@ public struct GenerateMatricesJob : IJobParallelFor
 		this.rot = rot;
 	}
 
-	public void Execute(int i) => UpdateMatrix(ref matrices, pos, rot, i, dimension, space, theta);
+	public void Execute(int i) => UpdateMatrix(ref matrices, ref bounds, boundSize, pos, rot, i, dimension, space, theta);
 
-	public static void UpdateMatrix(ref NativeArray<float3x4> matrices, float3 pos, quaternion rot, int i, int dimension, float space, float theta)
+	public static void UpdateMatrix(ref NativeArray<float3x4> matrices, ref NativeArray<AABB> bounds, float3 boundSize, float3 pos, quaternion rot, int i, int dimension, float space, float theta)
 	{
 		int3 index3D = MathUtil.Get3DIndex(i, dimension, dimension);
 		var mat3x4 = TestDataGenerator.GetTransformMatrixNoScale(
@@ -74,6 +83,7 @@ public struct GenerateMatricesJob : IJobParallelFor
 		mat4x4 = math.mul(parentMat4, mat4x4);
 
 		matrices[i] = new float3x4(mat4x4.c0.xyz, mat4x4.c1.xyz, mat4x4.c2.xyz, mat4x4.c3.xyz);
+		bounds[i] = new AABB(mat4x4.c3.xyz, boundSize);
 
 		//matrices[i] = TestDataGenerator.GetTransformMatrixNoScale(
 		//	pos + (new float3(index3D.x, index3D.y, index3D.z) * space),
@@ -87,6 +97,8 @@ public class TestDataGenerator : IDisposable
 	public int dimension;
 	public int Count => dimension * dimension * dimension;
 	public NativeArray<float3x4> matrices;
+	public NativeArray<AABB> bounds;
+	public float3 boundSize = 1;
 	public NativeArray<float4> colors;
 	public float anglePerSecond = 1;
 
@@ -109,6 +121,7 @@ public class TestDataGenerator : IDisposable
 		random.InitState();
 		EnsureArraySize(ref matrices, Count);
 		EnsureArraySize(ref colors, Count);
+		EnsureArraySize(ref bounds, Count);
 		this.parent = parent;
 	}
 
@@ -143,11 +156,11 @@ public class TestDataGenerator : IDisposable
 			this.dimension = dimension;
 			EnsureArraySize(ref matrices, count);
 		}
-		return RunMatrixJob(ref matrices, space, completeNow, deltaTime);
+		return RunMatrixJob(ref matrices, ref bounds, boundSize, space, completeNow, deltaTime);
 	}
 
-	private readonly ProfilerMarker runMatrixJobMarker = new ProfilerMarker(nameof(RunMatrixJob));
-	public JobHandle RunMatrixJob(ref NativeArray<float3x4> matrices, float space, bool completeNow, float deltaTime = -1)
+	private static readonly ProfilerMarker runMatrixJobMarker = new ProfilerMarker(nameof(RunMatrixJob));
+	public JobHandle RunMatrixJob(ref NativeArray<float3x4> matrices, ref NativeArray<AABB> bounds, float3 boundSize, float space, bool completeNow, float deltaTime = -1)
 	{
 		runMatrixJobMarker.Begin();
 
@@ -156,7 +169,7 @@ public class TestDataGenerator : IDisposable
 
 		quaternion parentRot = parent != null ? (quaternion)parent.rotation : quaternion.identity;
 		float3 parentPos = parent != null ? (float3)parent.position : float3.zero;
-		GenerateMatricesJob job = new GenerateMatricesJob(matrices, parentPos, parentRot, space, dimension, theta);
+		GenerateMatricesAndBoundsJob job = new GenerateMatricesAndBoundsJob(matrices, bounds, boundSize, parentPos, parentRot, space, dimension, theta);
 
 		try // We trycatch here because other jobs might be using the array
 		{
@@ -189,6 +202,7 @@ public class TestDataGenerator : IDisposable
 	{
 		currentMatrixJob.Complete();
 		matrices.Dispose();
+		bounds.Dispose();
 	}
 
 	public static float3x4 GetTransformMatrix(Transform transform)
