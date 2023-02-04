@@ -78,7 +78,7 @@ public struct CPUToGPUCopyAndCullJobParallel : IJobParallelFor
 		NativeArray<Plane> frustum,
 		out CPUToGPUCopyAndCullJobParallel mainJob,
 		out CPUToGPUCopyAndCullJob remainderJob,
-		int innerBatchLoopCount = 64)
+		int innerBatchLoopCount = 64, JobHandle dependsOn = default)
 	{
 		mainJob = new CPUToGPUCopyAndCullJobParallel(
 			indices: indices,
@@ -87,7 +87,7 @@ public struct CPUToGPUCopyAndCullJobParallel : IJobParallelFor
 			dstMatrices: dstMatrices,
 			frustum: frustum);
 
-		var handle = mainJob.Schedule(mainJob.bounds.Length, innerBatchLoopCount);
+		var handle = mainJob.Schedule(mainJob.bounds.Length, innerBatchLoopCount, dependsOn);
 		//var handle = mainJob.Schedule();
 
 		remainderJob = default;
