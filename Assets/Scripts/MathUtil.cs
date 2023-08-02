@@ -34,7 +34,7 @@ public static class MathUtil
 		return true;
 	}
 
-	[System.Serializable, BurstCompatible, StructLayout(LayoutKind.Sequential), BurstCompatible]
+	[System.Serializable, GenerateTestsForBurstCompatibility, StructLayout(LayoutKind.Sequential), GenerateTestsForBurstCompatibility]
 	public struct AABB
 	{
 		public float3 Center { get; private set; }
@@ -47,17 +47,17 @@ public static class MathUtil
 			Size = size;
 		}
 
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		public bool IsBoundsInFrustum(NativeArray<Plane> frustumPlanes)
-	{
-		for (int i = 0; i < 6; i++)
 		{
+			for (int i = 0; i < 6; i++)
+			{
 				if (ClassifyAgainstPlane(frustumPlanes[i]) < 0)
-				return false;
-		}
+					return false;
+			}
 
-		return true;
-	}
+			return true;
+		}
 
 		/// <summary>
 		/// Returns 0 if this bounds intersects the plane.
@@ -69,10 +69,10 @@ public static class MathUtil
 		public float ClassifyAgainstPlane(Plane plane)
 		{
 			float r = math.abs(Size.x * plane.normal.x)
-					 + math.abs(Size.y * plane.normal.y)
-					 + math.abs(Size.z * plane.normal.z);
+			          + math.abs(Size.y * plane.normal.y)
+			          + math.abs(Size.z * plane.normal.z);
 			float d = math.dot(plane.normal, Center)
-			 + plane.distance;
+			          + plane.distance;
 			if (math.abs(d) < r)
 				return 0f;
 			else if (d < 0.0f)
@@ -96,10 +96,11 @@ public static class MathUtil
 	/// <summary>
 	/// This is meant for manual vectorization of functions such as raycasting
 	/// </summary>
-	[System.Serializable, BurstCompatible]
+	[System.Serializable, GenerateTestsForBurstCompatibility]
 	public unsafe struct AABB4
 	{
 		public AABB x, y, z, w;
+
 		/// <summary>
 		/// The location of the center of the AABB
 		/// </summary>
@@ -128,7 +129,10 @@ public static class MathUtil
 				if ((uint)index >= 4)
 					throw new System.ArgumentException("index must be between[0...3]");
 #endif
-				fixed (AABB4* array = &this) { return ((AABB*)array)[index]; }
+				fixed (AABB4* array = &this)
+				{
+					return ((AABB*)array)[index];
+				}
 			}
 			set
 			{
@@ -136,7 +140,10 @@ public static class MathUtil
 				if ((uint)index >= 4)
 					throw new System.ArgumentException("index must be between[0...3]");
 #endif
-				fixed (AABB* array = &x) { array[index] = value; }
+				fixed (AABB* array = &x)
+				{
+					array[index] = value;
+				}
 			}
 		}
 
@@ -195,32 +202,35 @@ public static class MathUtil
 		public static float4 ClassifyAgainstPlane(in Plane plane, in float4x3 size, in float4x3 center)
 		{
 			float4 r = math.abs(size.c0 * plane.normal.x) +
-						math.abs(size.c1 * plane.normal.y) +
-						math.abs(size.c2 * plane.normal.z);
+			           math.abs(size.c1 * plane.normal.y) +
+			           math.abs(size.c2 * plane.normal.z);
 
 			float4 d = Dot4(center.c0, center.c1, center.c2, plane.normal)
-			 + plane.distance;
+			           + plane.distance;
 
 			return math.select(math.select(d - r, d + r, d < 0.0f), 0f, math.abs(d) < r);
 		}
 	}
 
-	[System.Serializable, BurstCompatible, StructLayout(LayoutKind.Sequential), BurstCompatible]
+	[System.Serializable, GenerateTestsForBurstCompatibility, StructLayout(LayoutKind.Sequential), GenerateTestsForBurstCompatibility]
 	public struct Plane
 	{
 		public float3 normal;
 		public float distance;
+
 		public Plane(UnityEngine.Plane up)
 		{
 			this.normal = up.normal;
 			this.distance = up.distance;
 		}
+
 		public Plane(float3 normal, float distance)
 		{
 			this.normal = normal;
 			this.distance = distance;
 		}
 	}
+
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	public static float4 Dot4(float4 x, float4 y, float4 z, float3 rhs) => x * rhs.x + y * rhs.y + z * rhs.z;
 
@@ -239,6 +249,7 @@ public static class MathUtil
 
 			n >>= tcnt + 1;
 		}
+
 		return i;
 	}
 }

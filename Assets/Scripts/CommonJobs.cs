@@ -70,7 +70,7 @@ namespace CommonJobs
 	}
 
 	[BurstCompile(FloatPrecision = FloatPrecision.Low, FloatMode = FloatMode.Fast)]
-	public struct CPUToGPUCopyAndCullFilterJob : IJobParallelForFilter
+	public struct CPUToGPUCopyAndCullFilterJob : IJobFilter
 	{
 		[ReadOnly] public NativeArray<float3x4> srcMatrices;
 		[ReadOnly] public NativeArray<AABB> bounds;
