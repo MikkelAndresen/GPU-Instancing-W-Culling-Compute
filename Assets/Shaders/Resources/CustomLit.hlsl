@@ -5,7 +5,11 @@
 	StructuredBuffer<uint> indexBuffer;
 	float4x4 GetMatrixFromInstanceID(uint instanceID) 
 	{
+#if defined(_MATRIX_INDEX_LOOKUP)
 		float3x4 mat = matrixBuffer[indexBuffer[instanceID]];
+#else
+	    float3x4 mat = matrixBuffer[instanceID];
+#endif
 		float4x4 mat4 = 
 		{
 			mat[0],
@@ -18,7 +22,11 @@
 
 	float4 GetColorFromInstanceID(uint instanceID)
 	{
+#if defined(_MATRIX_INDEX_LOOKUP)
 		return colorBuffer[indexBuffer[instanceID]];
+#else
+        return colorBuffer[instanceID];
+#endif
 	}
 #endif
 

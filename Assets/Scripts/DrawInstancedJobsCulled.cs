@@ -83,6 +83,7 @@ public class DrawInstancedJobsCulled : MonoBehaviour
 				// Those required keywords are somehow provided when I add a setup function to each shader pass, see the CustomLit.shader file for details.
 				enableInstancing = true
 			};
+			mat.EnableKeyword("_MATRIX_INDEX_LOOKUP");
 		}
 
 		dataGen = new TestDataGenerator(dimension, transform);
