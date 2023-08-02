@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Data;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
@@ -9,11 +10,18 @@ using Unity.Profiling;
 using UnityEngine;
 using UnityEngine.Jobs;
 using Plane = MathUtil.Plane;
+using static NativeCollectionExtensions;
 
 // TODO Generate bounds from sizes and matrices or transforms
 // TODO Support static use of matrices, do we want to upload matrices using culling every frame despite them being static 
 // or do we change the shader to use indexed matrices so that we only upload the indices instead?
 
+/// <summary>
+/// Allocated a transform array and a matrix array which the transforms are copied into each frame.
+/// Then filteres the matrix array using the <see cref="InFrustum"/> validation struct.
+/// Lastly copies filtered data into a compute buffer using <see cref="copyHandler"/>.
+/// </summary>
+[DefaultExecutionOrder(-1)]
 public class FrustrumFilterTransformJobSystem : MonoBehaviour
 {
 	[SerializeField] private int transformGatherBatchSize = 10;
@@ -21,74 +29,110 @@ public class FrustrumFilterTransformJobSystem : MonoBehaviour
 	[SerializeField] private int writeBatchCount = 10;
 	[SerializeField] private float3 defaultBoundSize = 1;
 
-	// [SerializeField, Tooltip("When this is true, we only upload the matrices from the transforms at startup")]
-	// private bool staticTransforms;
+	[SerializeField, Tooltip("When true, will always complete the filter job in late update, otherwise will need to have it's complete function called manually")]
+	private bool autoCompleteInLateUpdate = true;
+
+	public bool AutoCompleteInLateUpdate
+	{
+		get => autoCompleteInLateUpdate;
+		set => autoCompleteInLateUpdate = value;
+	}
+
+	public ComputeBuffer MatrixBuffer => matrixBuffer ??= new ComputeBuffer(TransformCount, sizeof(float) * 3 * 4)
+	{
+		name = "Matrix Buffer"
+	};
+
+	public int FilteredCount => CopyHandler.CountCopied;
+	public NativeArray<float3x4> Matrices => CopyHandler.src;
+	public bool FilterJobRunning { get; private set; }
+
+	private NativeCollectionExtensions.CopyHandler<float3x4, InFrustum> copyHandler;
+	private NativeCollectionExtensions.CopyHandler<float3x4, InFrustum> CopyHandler => copyHandler ??= new CopyHandler<float3x4, InFrustum>(TransformCount, default, indexingBatchCount, writeBatchCount, default);
 
 	private TransformAccessArray transformArray;
-	private NativeArray<float3x4> matrices;
 	private ComputeBuffer matrixBuffer;
 	private NativeArray<Plane> frustum;
 	private NativeArray<float3> boundSizes;
-	private UnityEngine.Plane[] unityFrustum;
+	private readonly UnityEngine.Plane[] unityFrustum = new UnityEngine.Plane[6];
 	private Camera mainCam;
 	private JobHandle handle;
-	private NativeCollectionExtensions.CopyHandler<float3x4, InFrustum> copyHandler;
-	
-	private void Start()
+
+	// TODO Make dynamic so we can add/remove externally
+	private int TransformCount => transform.childCount;
+
+	private void Awake()
 	{
 		mainCam = Camera.main;
-		transformArray = new TransformAccessArray(GetComponentsInChildren<Transform>());
-		matrices = new NativeArray<float3x4>(transformArray.length, Allocator.Persistent);
-		matrixBuffer = new ComputeBuffer(matrices.Length, UnsafeUtility.SizeOf(typeof(float3x4)), ComputeBufferType.Default,
+		frustum = new NativeArray<Plane>(6, Allocator.Persistent);
+		GatherChildTransforms();
+
+		if (transformArray.length == 0)
+		{
+			enabled = false;
+			return;
+		}
+
+		matrixBuffer = new ComputeBuffer(Matrices.Length, UnsafeUtility.SizeOf(typeof(float3x4)), ComputeBufferType.Default,
 			ComputeBufferMode.SubUpdates);
-		boundSizes = new NativeArray<float3>(matrices.Length, Allocator.Persistent);
+		matrixBuffer.name = "Instance Matrix buffer";
+
+		boundSizes = new NativeArray<float3>(Matrices.Length, Allocator.Persistent);
 
 		GenerateDefaultBoundSizes();
-
-		copyHandler = new NativeCollectionExtensions.CopyHandler<float3x4, InFrustum>(default, default, indexingBatchCount, writeBatchCount, default);
 	}
 
-	private void OnDestroy()
+	private void GatherChildTransforms()
 	{
-		transformArray.Dispose();
-		matrices.Dispose();
-		matrixBuffer.Dispose();
-		frustum.Dispose();
-		boundSizes.Dispose();
-		copyHandler.Dispose();
+		var allTransforms = GetComponentsInChildren<Transform>();
+		transformArray = new TransformAccessArray(allTransforms.Length);
+		foreach (var t in allTransforms)
+			if (t != transform && t.gameObject.activeInHierarchy)
+				transformArray.Add(t);
 	}
 
-	private void Update()
+	private unsafe void Update()
 	{
-		// if(staticTransforms)
-		// 	return;
-		
+		if (FilterJobRunning)
+			CompleteFilterJob();
+
 		InvalidateFrustumPlaneCache();
 
-		GatherMatricesTransformJob matrixGather = new GatherMatricesTransformJob(matrices);
-		InFrustum frustumChecker = new InFrustum()
+		GatherMatricesTransformJob matrixGather = new GatherMatricesTransformJob(Matrices);
+		CopyHandler.validator = new InFrustum()
 		{
 			frustum = frustum,
-			positions = matrices.Slice().SliceConvert<float3>(),
 			boundSizes = boundSizes
 		};
+		CopyHandler.indexingBatchCount = indexingBatchCount;
+		CopyHandler.writeBatchCount = writeBatchCount;
+		CopyHandler.dst = matrixBuffer.BeginWrite<float3x4>(0, Matrices.Length);
+		float3x4* dstPtr = (float3x4*)CopyHandler.dst.GetUnsafeReadOnlyPtr();
 
-		copyHandler.validator = frustumChecker;
-		copyHandler.indexingBatchCount = indexingBatchCount;
-		copyHandler.writeBatchCount = writeBatchCount;
-		copyHandler.src = matrices;
-		copyHandler.dst = matrixBuffer.BeginWrite<float3x4>(0, matrices.Length);
-		
 		// Possible job dependency conflict with dst because it is being written to by first job then second job gets created? 
+		FilterJobRunning = true;
 		handle = matrixGather.ScheduleReadOnlyByRef(transformArray, transformGatherBatchSize);
-		handle = copyHandler.IfCopyToParallel(handle);
-		// handle = matrices.IfCopyToParallel(dst, out counter, indexingBatchCount, writeBatchCount, handle, indices, counts, frustumChecker);
+		handle = CopyHandler.IfCopyToParallelUnsafe(dstPtr, handle);
 	}
-	
+
 	private void LateUpdate()
 	{
+		if (autoCompleteInLateUpdate)
+			CompleteFilterJob();
+	}
+
+	private static readonly ProfilerMarker completeFrustumFilterJobMarker = new ProfilerMarker("CompleteFrustumFilterJob");
+
+	public void CompleteFilterJob()
+	{
+		if (!FilterJobRunning)
+			return;
+
+		completeFrustumFilterJobMarker.Begin();
 		handle.Complete();
-		matrixBuffer.EndWrite<float3x4>(copyHandler.CountCopied);
+		matrixBuffer.EndWrite<float3x4>(CopyHandler.CountCopied);
+		FilterJobRunning = false;
+		completeFrustumFilterJobMarker.End();
 	}
 
 	private readonly ProfilerMarker invalidateFrustumPlanesMarker = new ProfilerMarker("Invalidate Frustum planes cache");
@@ -111,6 +155,15 @@ public class FrustrumFilterTransformJobSystem : MonoBehaviour
 			boundSizes[i] = defaultBoundSize;
 	}
 
+	private void OnDestroy()
+	{
+		transformArray.Dispose();
+		matrixBuffer.Dispose();
+		frustum.Dispose();
+		boundSizes.Dispose();
+		CopyHandler.Dispose();
+	}
+
 	public struct InFrustum : IValidator<float3x4>
 	{
 		[ReadOnly] public NativeArray<Plane> frustum;
@@ -118,10 +171,10 @@ public class FrustrumFilterTransformJobSystem : MonoBehaviour
 		[ReadOnly, NativeDisableParallelForRestriction]
 		public NativeSlice<float3> boundSizes;
 
-		[ReadOnly] public NativeSlice<float3> positions;
 		// TODO Make a diff check to see if the matrix is different and perhaps return false if not?
 
 		// Generate bound based on position and current size array, then compare it against frustum
-		public bool Validate(int index, float3x4 element) => new MathUtil.AABB(positions[index], boundSizes[index]).IsBoundsInFrustum(frustum);
+		public bool Validate(int index, float3x4 element) => new MathUtil.AABB(element.c3, boundSizes[index]).IsBoundsInFrustum(frustum);
+		// public bool Validate(int index, float3x4 element) => MathUtil.IsPointInFrustum(frustum, element.c3);
 	}
 }
