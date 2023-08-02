@@ -1,10 +1,8 @@
-using Unity.Collections.LowLevel.Unsafe;
-using Unity.Mathematics;
 using Unity.Profiling;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-[RequireComponent(typeof(FrustrumFilterTransformJobSystem))]
+[RequireComponent(typeof(FrustumFilterTransformJobSystem))]
 public class ProceduralRenderer : MonoBehaviour
 {
 	[SerializeField] private Mesh mesh;
@@ -13,13 +11,13 @@ public class ProceduralRenderer : MonoBehaviour
 	[SerializeField] private Material mat;
 	[SerializeField] private LightProbeUsage lightProbeUsage = LightProbeUsage.BlendProbes;
 
-	private FrustrumFilterTransformJobSystem frustumCuller;
+	private FrustumFilterTransformJobSystem frustumCuller;
 	private readonly Bounds bounds = new Bounds(Vector3.zero, Vector3.one * 10000);
 	protected static readonly int materialMatrixBufferID = Shader.PropertyToID("matrixBuffer");
 
 	private void Awake()
 	{
-		frustumCuller = GetComponent<FrustrumFilterTransformJobSystem>();
+		frustumCuller = GetComponent<FrustumFilterTransformJobSystem>();
 		frustumCuller.AutoCompleteInLateUpdate = false;
 		mat.SetBuffer(materialMatrixBufferID, frustumCuller.MatrixBuffer);
 	}
