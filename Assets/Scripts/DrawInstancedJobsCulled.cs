@@ -104,7 +104,7 @@ public class DrawInstancedJobsCulled : MonoBehaviour
 		mat.SetBuffer(colorBufferID, colorBuffer.Buffer);
 
 		RenderPipelineManager.beginFrameRendering += RenderPipelineManager_beginFrameRendering;
-		RenderPipelineManager.beginCameraRendering += RenderPipelineManager_beginCameraRendering; ;
+		RenderPipelineManager.beginCameraRendering += RenderPipelineManager_beginCameraRendering;
 	}
 
 	private void InvalidateMatrixBuffer()
@@ -225,7 +225,7 @@ public class DrawInstancedJobsCulled : MonoBehaviour
 			srcMatrices = dataGen.matrices,
 			dstMatrices = matrices,
 			frustum = nativeFrustumPlanes,
-			
+			bounds = dataGen.bounds
 		};
 		cullJobHandle = cullJob.ScheduleAppend(matrixIndices, TotalCount, innerBatchCount);
 
