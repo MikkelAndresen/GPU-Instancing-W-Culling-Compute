@@ -22,7 +22,7 @@ using static NativeCollectionExtensions;
 /// Lastly copies filtered data into a compute buffer using <see cref="copyHandler"/>.
 /// </summary>
 [DefaultExecutionOrder(-1)]
-public class FrustrumFilterTransformJobSystem : MonoBehaviour
+public class FrustumFilterTransformJobSystem : MonoBehaviour
 {
 	[SerializeField] private int transformGatherBatchSize = 10;
 	[SerializeField] private int indexingBatchCount = 10;
